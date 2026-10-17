@@ -180,14 +180,14 @@ jobs:
         run: npm run tauri -- android build --debug --apk --target aarch64 --ci -- --locked
       - name: Collect and verify debug APK
         run: python3 .github/scripts/collect-apk.py
+      - name: Upload clearly labelled Android preview to release
+        run: gh release upload "$RELEASE_TAG" artifacts/*_DEBUG.apk --clobber
       - uses: actions/upload-artifact@v4
         with:
           name: android-arm64-debug-APK
           path: artifacts/*_DEBUG.apk
           if-no-files-found: error
           retention-days: 30
-      - name: Upload clearly labelled Android preview to release
-        run: gh release upload "$RELEASE_TAG" artifacts/*_DEBUG.apk --clobber
 
   ios-simulator:
     needs: release
@@ -226,8 +226,11 @@ jobs:
         run: python3 .github/scripts/collect-ios-simulator.py
       - name: Install and launch in an iPhone simulator
         run: python3 .github/scripts/smoke-ios-simulator.py
+      - name: Upload clearly labelled simulator preview to release
+        run: gh release upload "$RELEASE_TAG" artifacts/*_SIMULATOR_ONLY.zip --clobber
       - uses: actions/upload-artifact@v4
         if: always()
+        continue-on-error: true
         with:
           name: ios-simulator-runtime-evidence
           path: artifacts/ios-simulator-smoke.png
@@ -246,5 +249,3 @@ jobs:
           path: src-tauri/Cargo.lock
           if-no-files-found: ignore
           retention-days: 14
-      - name: Upload clearly labelled simulator preview to release
-        run: gh release upload "$RELEASE_TAG" artifacts/*_SIMULATOR_ONLY.zip --clobber

@@ -15,6 +15,8 @@ assert.deepEqual(capability.permissions, []);
 assert.deepEqual(capability.windows, ['main']);
 assert.deepEqual(config.app.security.capabilities, ['frontend-only']);
 assert.match(config.app.security.csp, /object-src 'none'/);
+assert.match(config.app.security.csp, /connect-src[^;]*http:\/\/127\.0\.0\.1:18743/);
+assert.match(config.app.security.devCsp, /connect-src[^;]*http:\/\/127\.0\.0\.1:18743/);
 assert.equal(json('src-tauri/tauri.android.conf.json').bundle.android.minSdkVersion, 24);
 const ios = json('src-tauri/tauri.ios.conf.json').bundle.iOS;
 assert.equal(ios.minimumSystemVersion, '16.0');

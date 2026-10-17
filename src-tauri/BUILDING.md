@@ -1,6 +1,8 @@
 # Native packaging
 
-This is a thin Tauri 2 wrapper around the bundled charting frontend. There are no custom Rust commands, native plugins, filesystem/shell permissions, broker connections or signing credentials. Browser file inputs and local browser storage remain frontend features. Release builds embed `../dist`; the development server uses `127.0.0.1:1420`.
+This is a thin Tauri 2 wrapper around the bundled charting frontend. There are no custom Rust commands, native plugins, filesystem/shell permissions, broker order execution or signing credentials. Browser file inputs and local browser storage remain frontend features. Release builds embed `../dist`; the development server uses `127.0.0.1:1420`.
+
+The content security policy permits one optional HTTP data source at `http://127.0.0.1:18743`, intended for a separately installed read-only local MT5 data adapter. It does not enable remote endpoints, native shell access or trade submission. This loopback address refers to the device running the app: on a phone it cannot reach the adapter running on your PC. Android cleartext policy and iOS App Transport Security behavior have not been verified for this optional feed; simulator compilation/launch is not evidence that a mobile feed connects.
 
 The native source/configuration and icons can be checked locally with:
 
@@ -43,7 +45,7 @@ xcrun simctl launch booted io.github.maaskk.signalhivecharts
 
 For a physical iPhone development build, a maintainer needs a Mac with Xcode, an Apple account configured in Xcode, a valid development team and the device's provisioning. Open the generated project with `npm run tauri -- ios dev --open`, select the account/team in Xcode and build for the connected device. App Store/TestFlight distribution additionally requires the appropriate Apple Developer Program membership and distribution signing. Keep signing keys and provisioning files in private CI secrets, never in this public repository.
 
-Both mobile packages embed the frontend assets locally. Desktop and mobile use the same analysis and virtual paper ledger; they do not wrap the published GitHub Pages website and do not connect to an MT5 account. The initial wrapper deliberately has no native plugins or broad filesystem permissions. File import, workspace export and browser external-link handling still need platform runtime checks; frontend browser tests alone are not evidence of native mobile behavior.
+Both mobile packages embed the frontend assets locally. Desktop and mobile use the same analysis and virtual paper ledger; they do not wrap the published GitHub Pages website or execute broker orders. The optional PC loopback data adapter is separate from the mobile package. The initial wrapper deliberately has no native plugins or broad filesystem permissions. File import, workspace export and browser external-link handling still need platform runtime checks; frontend browser tests alone are not evidence of native mobile behavior.
 
 The iOS deployment target is 16.0. The frontend uses ES2022 and modern WebKit APIs, including `Object.hasOwn` and `structuredClone` ([introduced in Safari/iOS 15.4](https://webkit.org/blog/12445/new-webkit-features-in-safari-15-4/)). Requiring iOS 16 avoids advertising support for the earlier iOS 15.0 WebKit runtime; it does not replace testing on the oldest supported OS.
 
