@@ -1,4 +1,4 @@
-name: Desktop installers and Android preview
+name: Desktop installers and mobile previews
 
 on:
   push:
@@ -60,7 +60,7 @@ jobs:
                 name: `Signalhive Charts ${tag} — preview`,
                 prerelease: true,
                 draft: false,
-                body: 'Open-source offline analysis and virtual paper trading. No broker or real-money execution. Desktop installers are unsigned (macOS uses an ad-hoc signature and is not notarized). Android ARM64 APK is a DEBUG test build, not a production-signed or Play Store release. CI uploads platforms as their jobs finish; check this workflow for failed or pending targets. Export workspaces before replacing an earlier Android debug installation.'
+                body: 'Open-source offline analysis and virtual paper trading. No broker or real-money execution. Desktop installers are unsigned (macOS uses an ad-hoc signature and is not notarized). Android ARM64 APK is a DEBUG test build, not a production-signed or Play Store release. The iOS ARM64 SIMULATOR zip runs only in an Apple Silicon Mac simulator; it cannot be installed on an iPhone. Physical iPhone distribution needs Apple code signing and provisioning, which are not configured. CI uploads platforms as their jobs finish; check this workflow for failed or pending targets. Export workspaces before replacing an earlier Android debug installation.'
               })).data;
             }
             core.setOutput('tag', tag);
@@ -182,3 +182,53 @@ jobs:
           retention-days: 30
       - name: Upload clearly labelled Android preview to release
         run: gh release upload "$RELEASE_TAG" artifacts/*_DEBUG.apk --clobber
+
+  ios-simulator:
+    needs: release
+    runs-on: macos-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      CI: 'true'
+      RELEASE_TAG: ${{ needs.release.outputs.tag }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios-sim
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+          key: ios-arm64-simulator
+      - name: Install Xcode project generator
+        run: brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+      - run: npm ci
+      - name: Generate the iOS Xcode project without signing credentials
+        run: npm run tauri -- ios init --ci --skip-targets-install
+      - name: Build the iOS simulator application without code signing
+        run: npm run tauri -- ios build --target aarch64-sim --no-sign --ci
+      - name: Verify and package the simulator application
+        run: python3 .github/scripts/collect-ios-simulator.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-arm64-SIMULATOR-only
+          path: artifacts/*_SIMULATOR_ONLY.zip
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cargo-lock-ios-simulator
+          path: src-tauri/Cargo.lock
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Upload clearly labelled simulator preview to release
+        run: gh release upload "$RELEASE_TAG" artifacts/*_SIMULATOR_ONLY.zip --clobber

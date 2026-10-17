@@ -17,13 +17,14 @@ A native compilation requires Rust and the platform's Tauri prerequisites. This 
 
 `.github/workflows/release.yml` runs on version tags such as `v0.1.0` or a manual dispatch. The tag must match `package.json`, `Cargo.toml` and `tauri.conf.json`. It first reruns tests/build, creates a preview release and then builds these independent jobs:
 
-| Platform | Output |
-| --- | --- |
-| Linux x64 | AppImage and Debian package |
-| Windows x64 | NSIS installer |
-| macOS Intel | App bundle and DMG, x86_64 target |
-| macOS Apple Silicon | App bundle and DMG, aarch64 target |
-| Android ARM64 | Clearly named installable **DEBUG APK** |
+| Platform            | Output                                                             |
+| ------------------- | ------------------------------------------------------------------ |
+| Linux x64           | AppImage and Debian package                                        |
+| Windows x64         | NSIS installer                                                     |
+| macOS Intel         | App bundle and DMG, x86_64 target                                  |
+| macOS Apple Silicon | App bundle and DMG, aarch64 target                                 |
+| Android ARM64       | Clearly named installable **DEBUG APK**                            |
+| iOS ARM64 simulator | Clearly named **SIMULATOR ONLY** `.app` zip for Apple Silicon Macs |
 
 The native jobs use the committed npm lockfile, exact Tauri crate versions and Rust stable (the crates require Rust 1.90 or later). The first native build generates `Cargo.lock`; CI retains that lockfile as an artifact so it can be reviewed and committed for subsequent dependency reproducibility. It must not be confused with a successful local compile.
 
@@ -31,10 +32,25 @@ Desktop outputs have no paid publisher certificates. macOS receives only an ad-h
 
 The Android job initializes a fresh project noninteractively with the installed Tauri CLI, installs the SDK platform named by that generated project and builds only the ARM64 ABI. It uses Android's test/debug signing, verifies the APK and labels the asset **DEBUG**. It is not a production-signed release or Play Store package. Hosted runners may produce a different debug key on subsequent runs, so replacing an older debug installation can require uninstalling it. Export workspaces first; uninstalling clears that app's local storage.
 
+The iOS job runs on an Apple Silicon macOS runner with Xcode. It initializes the Xcode project, compiles `aarch64-apple-ios-sim` without signing and checks the resulting bundle identifier, simulator platform and Mach-O ARM64 architecture before creating the zip. This is a native iOS app bundle for the **simulator**, not an iPhone-installable IPA. The workflow cannot produce an App Store or TestFlight release without separately supplied Apple credentials and provisioning. There is no fictitious development-team ID in the public configuration.
+
+To use a successfully built simulator artifact on an Apple Silicon Mac with Xcode, unzip it and drag `Signalhive Charts.app` onto a booted iPhone simulator, or run:
+
+```sh
+xcrun simctl install booted '/path/to/Signalhive Charts.app'
+xcrun simctl launch booted io.github.maaskk.signalhivecharts
+```
+
+For a physical iPhone development build, a maintainer needs a Mac with Xcode, an Apple account configured in Xcode, a valid development team and the device's provisioning. Open the generated project with `npm run tauri -- ios dev --open`, select the account/team in Xcode and build for the connected device. App Store/TestFlight distribution additionally requires the appropriate Apple Developer Program membership and distribution signing. Keep signing keys and provisioning files in private CI secrets, never in this public repository.
+
+Both mobile packages embed the frontend assets locally. Desktop and mobile use the same analysis and virtual paper ledger; they do not wrap the published GitHub Pages website and do not connect to an MT5 account. The initial wrapper deliberately has no native plugins or broad filesystem permissions. File import, workspace export and browser external-link handling still need platform runtime checks; frontend browser tests alone are not evidence of native mobile behavior.
+
 ## Official references
 
 - [Tauri GitHub build workflow](https://v2.tauri.app/distribute/pipelines/github/)
 - [Tauri configuration](https://v2.tauri.app/reference/config/)
 - [Native and Android prerequisites](https://v2.tauri.app/start/prerequisites/)
 - [Capabilities and permissions](https://v2.tauri.app/security/capabilities/)
+- [iOS build CLI](https://v2.tauri.app/reference/cli/#ios-build)
+- [iOS signing and distribution requirements](https://v2.tauri.app/distribute/sign/ios/)
 - [GitHub Pages custom workflows](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)
