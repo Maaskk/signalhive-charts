@@ -1,0 +1,7 @@
+/target/
+/gen/android/
+/gen/apple/
+/gen/schemas/
+*.keystore
+*.jks
+local.properties

@@ -1,0 +1,184 @@
+name: Desktop installers and Android preview
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag matching package version, for example v0.1.0'
+        required: true
+        default: v0.1.0
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      id: ${{ steps.release.outputs.id }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: node .github/scripts/validate-native.mjs
+      - run: npm run build
+      - uses: actions/github-script@v8
+        id: release
+        env:
+          REQUESTED_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const version = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
+            const tag = process.env.REQUESTED_TAG;
+            if (tag !== `v${version}`) throw new Error('Release tag must match package.json version.');
+            let release;
+            try {
+              release = (await github.rest.repos.getReleaseByTag({ ...context.repo, tag })).data;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              release = (await github.rest.repos.createRelease({
+                ...context.repo,
+                tag_name: tag,
+                target_commitish: context.sha,
+                name: `Signalhive Charts ${tag} — preview`,
+                prerelease: true,
+                draft: false,
+                body: 'Open-source offline analysis and virtual paper trading. No broker or real-money execution. Desktop installers are unsigned (macOS uses an ad-hoc signature and is not notarized). Android ARM64 APK is a DEBUG test build, not a production-signed or Play Store release. CI uploads platforms as their jobs finish; check this workflow for failed or pending targets. Export workspaces before replacing an earlier Android debug installation.'
+              })).data;
+            }
+            core.setOutput('tag', tag);
+            core.setOutput('id', String(release.id));
+
+  desktop:
+    needs: release
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            label: linux-x64
+            target: x86_64-unknown-linux-gnu
+          - platform: windows-latest
+            label: windows-x64
+            target: x86_64-pc-windows-msvc
+          - platform: macos-latest
+            label: macos-arm64
+            target: aarch64-apple-darwin
+          - platform: macos-latest
+            label: macos-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install Linux build libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libfuse2 patchelf file xdg-utils
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+          key: ${{ matrix.label }}
+      - run: npm ci
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tauriScript: npm run tauri
+          releaseId: ${{ needs.release.outputs.id }}
+          tagName: ${{ needs.release.outputs.tag }}
+          args: --target ${{ matrix.target }} --ci
+          uploadUpdaterJson: false
+          uploadWorkflowArtifacts: true
+          releaseAssetNamePattern: '[name]_[version]_[platform]_[arch]_[bundle][ext]'
+          workflowArtifactNamePattern: 'desktop-[platform]-[arch]-[bundle]'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cargo-lock-${{ matrix.label }}
+          path: src-tauri/Cargo.lock
+          if-no-files-found: ignore
+          retention-days: 14
+
+  android-debug:
+    needs: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      CI: 'true'
+      RELEASE_TAG: ${{ needs.release.outputs.tag }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+          key: android-arm64-debug
+      - name: Install stable Android NDK
+        run: |
+          sdkmanager 'platform-tools' 'ndk;29.0.14206865'
+          echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
+      - run: npm ci
+      - name: Generate Android project without prompts
+        run: npm run tauri -- android init --ci --skip-targets-install
+      - name: Install the SDK platform required by the generated project
+        run: |
+          sdk_api=$(python3 -c 'import pathlib,re; text=pathlib.Path("src-tauri/gen/android/app/build.gradle.kts").read_text(); match=re.search(r"compileSdk\s*=\s*(\d+)",text); assert match, "compileSdk not found"; print(match.group(1))')
+          sdkmanager "platforms;android-$sdk_api" "build-tools;$sdk_api.0.0"
+      - name: Build installable ARM64 DEBUG APK
+        run: npm run tauri -- android build --debug --apk --target aarch64 --ci
+      - name: Collect and verify debug APK
+        run: python3 .github/scripts/collect-apk.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-arm64-debug-APK
+          path: artifacts/*_DEBUG.apk
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload clearly labelled Android preview to release
+        run: gh release upload "$RELEASE_TAG" artifacts/*_DEBUG.apk --clobber
