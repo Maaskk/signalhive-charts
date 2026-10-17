@@ -217,6 +217,15 @@ jobs:
         run: npm run tauri -- ios build --target aarch64-sim --no-sign --ci
       - name: Verify and package the simulator application
         run: python3 .github/scripts/collect-ios-simulator.py
+      - name: Install and launch in an iPhone simulator
+        run: python3 .github/scripts/smoke-ios-simulator.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-simulator-runtime-evidence
+          path: artifacts/ios-simulator-smoke.png
+          if-no-files-found: ignore
+          retention-days: 14
       - uses: actions/upload-artifact@v4
         with:
           name: ios-arm64-SIMULATOR-only
