@@ -26,7 +26,7 @@ A native compilation requires Rust and the platform's Tauri prerequisites. This 
 | Android ARM64       | Clearly named installable **DEBUG APK**                            |
 | iOS ARM64 simulator | Clearly named **SIMULATOR ONLY** `.app` zip for Apple Silicon Macs |
 
-The native jobs use the committed npm lockfile, exact Tauri crate versions and Rust stable (the crates require Rust 1.90 or later). The first native build generates `Cargo.lock`; CI retains that lockfile as an artifact so it can be reviewed and committed for subsequent dependency reproducibility. It must not be confused with a successful local compile.
+The native jobs use the committed npm and Cargo lockfiles, exact Tauri crate versions and Rust stable (the crates require Rust 1.90 or later). `Cargo.lock` was recovered from the successful first macOS ARM64 hosted build, reviewed and committed. Subsequent builds pass Cargo's `--locked` flag and retain the lockfile as a workflow artifact. This hosted compilation must not be confused with a successful local compile.
 
 Desktop outputs have no paid publisher certificates. macOS receives only an ad-hoc signature and is not notarized; macOS and Windows may warn or restrict installation. Release signing/notarization requires separately configured developer accounts and credentials, which are not part of this repository.
 
@@ -45,7 +45,7 @@ For a physical iPhone development build, a maintainer needs a Mac with Xcode, an
 
 Both mobile packages embed the frontend assets locally. Desktop and mobile use the same analysis and virtual paper ledger; they do not wrap the published GitHub Pages website and do not connect to an MT5 account. The initial wrapper deliberately has no native plugins or broad filesystem permissions. File import, workspace export and browser external-link handling still need platform runtime checks; frontend browser tests alone are not evidence of native mobile behavior.
 
-The iOS deployment target is 16.0. The frontend uses ES2022 and modern WebKit APIs, including `Object.hasOwn` and `structuredClone` (introduced in Safari/iOS 15.4). Requiring iOS 16 avoids advertising support for the earlier iOS 15.0 WebKit runtime; it does not replace testing on the oldest supported OS.
+The iOS deployment target is 16.0. The frontend uses ES2022 and modern WebKit APIs, including `Object.hasOwn` and `structuredClone` ([introduced in Safari/iOS 15.4](https://webkit.org/blog/12445/new-webkit-features-in-safari-15-4/)). Requiring iOS 16 avoids advertising support for the earlier iOS 15.0 WebKit runtime; it does not replace testing on the oldest supported OS.
 
 ## Official references
 

@@ -118,7 +118,7 @@ jobs:
           tauriScript: npm run tauri
           releaseId: ${{ needs.release.outputs.id }}
           tagName: ${{ needs.release.outputs.tag }}
-          args: --target ${{ matrix.target }} --ci
+          args: --target ${{ matrix.target }} --ci -- --locked
           uploadUpdaterJson: false
           uploadWorkflowArtifacts: true
           releaseAssetNamePattern: '[name]_[version]_[platform]_[arch]_[bundle][ext]'
@@ -177,7 +177,7 @@ jobs:
           sdk_api=$(python3 -c 'import pathlib,re; text=pathlib.Path("src-tauri/gen/android/app/build.gradle.kts").read_text(); match=re.search(r"compileSdk\s*=\s*(\d+)",text); assert match, "compileSdk not found"; print(match.group(1))')
           sdkmanager "platforms;android-$sdk_api" "build-tools;$sdk_api.0.0"
       - name: Build installable ARM64 DEBUG APK
-        run: npm run tauri -- android build --debug --apk --target aarch64 --ci
+        run: npm run tauri -- android build --debug --apk --target aarch64 --ci -- --locked
       - name: Collect and verify debug APK
         run: python3 .github/scripts/collect-apk.py
       - uses: actions/upload-artifact@v4
@@ -221,7 +221,7 @@ jobs:
       - name: Generate the iOS Xcode project without signing credentials
         run: npm run tauri -- ios init --ci --skip-targets-install
       - name: Build the iOS simulator application without code signing
-        run: npm run tauri -- ios build --target aarch64-sim --no-sign --ci
+        run: npm run tauri -- ios build --target aarch64-sim --no-sign --ci -- --locked
       - name: Verify and package the simulator application
         run: python3 .github/scripts/collect-ios-simulator.py
       - name: Install and launch in an iPhone simulator
