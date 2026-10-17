@@ -6,8 +6,14 @@ const pkg = json('package.json');
 const config = json('src-tauri/tauri.conf.json');
 const capability = json('src-tauri/capabilities/frontend-only.json');
 const cargo = readFileSync('src-tauri/Cargo.toml', 'utf8');
+const cargoLock = readFileSync('src-tauri/Cargo.lock', 'utf8');
 assert.equal(config.version, pkg.version, 'Tauri/frontend versions must agree');
 assert.match(cargo, new RegExp(`version = "${pkg.version.replaceAll('.', '\\.')}"`));
+assert.equal(
+  cargoLock.match(/name = "signalhive-charts"\nversion = "([^"]+)"/)?.[1],
+  pkg.version,
+  'Cargo.lock app version must agree before a locked native release'
+);
 assert.equal(config.build.frontendDist, '../dist');
 assert.equal(config.build.devUrl, 'http://127.0.0.1:1420');
 assert.equal(config.app.withGlobalTauri, false);
