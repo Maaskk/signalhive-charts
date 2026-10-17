@@ -17,7 +17,7 @@ assert.deepEqual(config.app.security.capabilities, ['frontend-only']);
 assert.match(config.app.security.csp, /object-src 'none'/);
 assert.equal(json('src-tauri/tauri.android.conf.json').bundle.android.minSdkVersion, 24);
 const ios = json('src-tauri/tauri.ios.conf.json').bundle.iOS;
-assert.equal(ios.minimumSystemVersion, '15.0');
+assert.equal(ios.minimumSystemVersion, '16.0');
 assert.equal(ios.developmentTeam, undefined, 'Public config must not invent an Apple signing team');
 assert.ok(!config.plugins || Object.keys(config.plugins).length === 0);
 for (const icon of config.bundle.icon)

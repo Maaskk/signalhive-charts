@@ -45,6 +45,8 @@ For a physical iPhone development build, a maintainer needs a Mac with Xcode, an
 
 Both mobile packages embed the frontend assets locally. Desktop and mobile use the same analysis and virtual paper ledger; they do not wrap the published GitHub Pages website and do not connect to an MT5 account. The initial wrapper deliberately has no native plugins or broad filesystem permissions. File import, workspace export and browser external-link handling still need platform runtime checks; frontend browser tests alone are not evidence of native mobile behavior.
 
+The iOS deployment target is 16.0. The frontend uses ES2022 and modern WebKit APIs, including `Object.hasOwn` and `structuredClone` (introduced in Safari/iOS 15.4). Requiring iOS 16 avoids advertising support for the earlier iOS 15.0 WebKit runtime; it does not replace testing on the oldest supported OS.
+
 ## Official references
 
 - [Tauri GitHub build workflow](https://v2.tauri.app/distribute/pipelines/github/)
