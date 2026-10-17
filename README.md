@@ -45,6 +45,10 @@ The generated `dist` directory can be served by any static HTTP server. Do not o
 - **Windows / macOS / Linux / Android packages:** see [Releases](https://github.com/Maaskk/signalhive-charts/releases) for the actual artifacts produced by CI. A build configuration is not evidence that a package is available or tested on hardware.
 - Native packaging uses Tauri 2. macOS and Windows releases are initially unsigned; Android preview APKs use a development signing identity and are not a Play Store release. See [platform builds](docs/PLATFORMS.md).
 
+### Linux app menu
+
+After `npm run build`, run `python3 scripts/install-linux.py` to install a local app icon. The preview opens its bundled code in a dedicated Chromium application window and stops its loopback server when closed. It does not open a remote website or use your everyday browser profile. When a native release AppImage is available, `python3 scripts/install-linux.py --native /path/to/verified.AppImage` installs that native build behind the same icon.
+
 ## Use it
 
 1. Pick a market and timeframe, or import an OHLCV CSV from the workspace menu.
