@@ -35,6 +35,7 @@ def main():
         shutil.rmtree(target / 'dist')
     shutil.copytree(root / 'dist', target / 'dist')
     shutil.copy2(root / 'desktop/launcher.py', target / 'launcher.py')
+    shutil.copy2(root / 'desktop/wine_bridge.py', target / 'wine_bridge.py')
     shutil.copy2(root / 'public/icon.svg', target / 'icon.svg')
     if args.native:
         (target / 'native').mkdir(exist_ok=True)

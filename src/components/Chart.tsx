@@ -1,5 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import {
+  AreaSeries,
+  BarSeries,
   CandlestickSeries,
   ColorType,
   CrosshairMode,
@@ -16,12 +18,33 @@ import {
 import type { Candle, IndicatorSettings, Instrument, Projection } from '../types';
 import { atr, bollinger, confirmedPivots, ema, macd, rsi, sma } from '../lib/indicators';
 import { indexToTime, timeToIndex } from '../lib/chartTime';
+import {
+  DEFAULT_INDICATOR_CONFIG,
+  type IndicatorConfig,
+  type IndicatorLineWidth,
+} from '../lib/indicatorConfig';
+import { DEFAULT_CHART_APPEARANCE, type ChartAppearance } from '../lib/chartAppearance';
+
+/** Related study lines share one calculation per candle array, without retaining old replay arrays. */
+function cachedCalculation<T>(calculate: (data: Candle[]) => T): (data: Candle[]) => T {
+  const cache = new WeakMap<Candle[], T>();
+  return (data) => {
+    let result = cache.get(data);
+    if (result === undefined) {
+      result = calculate(data);
+      cache.set(data, result);
+    }
+    return result;
+  };
+}
 
 interface Props {
   candles: Candle[];
   instrument: Instrument;
   indicators: IndicatorSettings;
   grid: boolean;
+  config?: IndicatorConfig;
+  appearance?: ChartAppearance;
   onProjection: (projection: Projection | null) => void;
   onHover: (candle: Candle | null) => void;
 }
@@ -32,7 +55,16 @@ export interface ChartHandle {
 }
 
 export const Chart = forwardRef<ChartHandle, Props>(function Chart(
-  { candles, instrument, indicators, grid, onProjection, onHover },
+  {
+    candles,
+    instrument,
+    indicators,
+    grid,
+    config = DEFAULT_INDICATOR_CONFIG,
+    appearance = DEFAULT_CHART_APPEARANCE,
+    onProjection,
+    onHover,
+  },
   ref
 ) {
   const host = useRef<HTMLDivElement>(null);
@@ -49,6 +81,8 @@ export const Chart = forwardRef<ChartHandle, Props>(function Chart(
   const callbackRef = useRef({ onProjection, onHover });
   callbackRef.current = { onProjection, onHover };
   const [error, setError] = useState('');
+  const configKey = JSON.stringify(config);
+  const appearanceKey = JSON.stringify(appearance);
 
   useImperativeHandle(
     ref,
@@ -69,7 +103,7 @@ export const Chart = forwardRef<ChartHandle, Props>(function Chart(
         const canvas = chart.takeScreenshot();
         const overlays =
           host.current.parentElement?.querySelectorAll<SVGSVGElement>(
-            'svg.profile-overlay, svg.drawing-overlay'
+            'svg.profile-overlay, svg.drawing-overlay, svg.paper-levels'
           ) ?? [];
         for (const overlay of overlays) {
           const serialized = new XMLSerializer().serializeToString(overlay);
@@ -131,21 +165,21 @@ export const Chart = forwardRef<ChartHandle, Props>(function Chart(
         width: container.clientWidth,
         height: container.clientHeight,
         layout: {
-          background: { type: ColorType.Solid, color: '#10151f' },
-          textColor: '#8e9ab0',
+          background: { type: ColorType.Solid, color: appearance.background },
+          textColor: appearance.text,
           fontFamily: 'Inter, system-ui, sans-serif',
-          fontSize: 11,
+          fontSize: appearance.fontSize,
           attributionLogo: true,
           panes: { separatorColor: '#263044', separatorHoverColor: '#879bff', enableResize: true },
         },
         grid: {
-          vertLines: { visible: grid, color: '#1b2332' },
-          horzLines: { visible: grid, color: '#1b2332' },
+          vertLines: { visible: grid, color: appearance.gridColor },
+          horzLines: { visible: grid, color: appearance.gridColor },
         },
         crosshair: {
           mode: CrosshairMode.Normal,
-          vertLine: { color: '#62728e', labelBackgroundColor: '#384765' },
-          horzLine: { color: '#62728e', labelBackgroundColor: '#384765' },
+          vertLine: { color: appearance.crosshairColor, labelBackgroundColor: '#384765' },
+          horzLine: { color: appearance.crosshairColor, labelBackgroundColor: '#384765' },
         },
         rightPriceScale: {
           borderColor: '#283142',
@@ -168,31 +202,54 @@ export const Chart = forwardRef<ChartHandle, Props>(function Chart(
         },
       });
       chartRef.current = chart;
-      const main = chart.addSeries(CandlestickSeries, {
-        upColor: '#2cc9a1',
-        downColor: '#ef6476',
-        borderVisible: false,
-        wickUpColor: '#2cc9a1',
-        wickDownColor: '#ef6476',
-        priceFormat: {
-          type: 'price',
-          precision: instrument.decimals,
-          minMove: 10 ** -instrument.decimals,
-        },
-      });
+      const priceFormat = {
+        type: 'price' as const,
+        precision: instrument.decimals,
+        minMove: 10 ** -instrument.decimals,
+      };
+      const main =
+        appearance.chartType === 'bars'
+          ? chart.addSeries(BarSeries, {
+              upColor: appearance.upColor,
+              downColor: appearance.downColor,
+              priceFormat,
+            })
+          : appearance.chartType === 'line'
+            ? chart.addSeries(LineSeries, {
+                color: appearance.lineColor,
+                lineWidth: 2,
+                priceFormat,
+              })
+            : appearance.chartType === 'area'
+              ? chart.addSeries(AreaSeries, {
+                  lineColor: appearance.lineColor,
+                  topColor: appearance.areaTopColor,
+                  bottomColor: appearance.areaBottomColor,
+                  priceFormat,
+                })
+              : chart.addSeries(CandlestickSeries, {
+                  upColor: appearance.upColor,
+                  downColor: appearance.downColor,
+                  borderUpColor: appearance.upColor,
+                  borderDownColor: appearance.downColor,
+                  borderVisible: appearance.borderVisible,
+                  wickUpColor: appearance.wickUpColor,
+                  wickDownColor: appearance.wickDownColor,
+                  priceFormat,
+                });
       const registerData = (apply: (data: Candle[]) => void) => {
         dataUpdaters.current.push(apply);
         apply(initialCandles);
       };
       registerData((data) =>
-        main.setData(data.map((c) => ({ ...c, time: c.time as UTCTimestamp })))
+        main.setData(data.map((c) => ({ ...c, time: c.time as UTCTimestamp, value: c.close })))
       );
       const line = (
         compute: (data: Candle[]) => { time: number; value: number }[],
         color: string,
         pane = 0,
         title = '',
-        width: 1 | 2 = 1
+        width: IndicatorLineWidth = 1
       ) => {
         const series = chart!.addSeries(
           LineSeries,
@@ -212,30 +269,67 @@ export const Chart = forwardRef<ChartHandle, Props>(function Chart(
         return series;
       };
       if (indicators.ema) {
-        line((data) => ema(data, 9), '#29b6f6', 0, 'EMA 9', 2);
-        line((data) => ema(data, 21), '#facc15', 0, 'EMA 21', 2);
-        line((data) => ema(data, 200), '#ef5350', 0, 'EMA 200', 2);
+        config.ema.periods.forEach((period, i) =>
+          line(
+            (data) => ema(data, period),
+            config.ema.colors[i],
+            0,
+            `EMA ${period}`,
+            config.ema.width
+          )
+        );
       }
-      if (indicators.sma) line((data) => sma(data, 50), '#c59aff', 0, 'SMA 50');
+      if (indicators.sma)
+        line(
+          (data) => sma(data, config.sma.period),
+          config.sma.color,
+          0,
+          `SMA ${config.sma.period}`,
+          config.sma.width
+        );
       if (indicators.bollinger) {
-        line((data) => bollinger(data).upper, '#657fa4');
-        line((data) => bollinger(data).middle, '#839cc2');
-        line((data) => bollinger(data).lower, '#657fa4');
+        const bands = cachedCalculation((data) =>
+          bollinger(data, config.bollinger.period, config.bollinger.deviations)
+        );
+        line(
+          (data) => bands(data).upper,
+          config.bollinger.bandColor,
+          0,
+          '',
+          config.bollinger.width
+        );
+        line(
+          (data) => bands(data).middle,
+          config.bollinger.middleColor,
+          0,
+          '',
+          config.bollinger.width
+        );
+        line(
+          (data) => bands(data).lower,
+          config.bollinger.bandColor,
+          0,
+          '',
+          config.bollinger.width
+        );
       }
       if (indicators.levels) {
         let priceLines: IPriceLine[] = [];
         registerData((data) => {
           priceLines.forEach((priceLine) => main.removePriceLine(priceLine));
           priceLines = [];
-          const pivots = confirmedPivots(data);
+          const pivots = confirmedPivots(data, config.levels.radius);
           for (const kind of ['support', 'resistance'] as const) {
-            const distinct = pivots.filter((p) => p.kind === kind).slice(-3);
+            const distinct = pivots.filter((p) => p.kind === kind).slice(-config.levels.count);
             distinct.forEach((p, i) =>
               priceLines.push(
                 main.createPriceLine({
                   price: p.value,
-                  color: kind === 'support' ? '#2cc9a180' : '#ef647680',
-                  lineWidth: 1,
+                  color:
+                    (kind === 'support'
+                      ? config.levels.supportColor
+                      : config.levels.resistanceColor) + '80',
+                  lineWidth: config.levels.width,
                   lineStyle: LineStyle.Dashed,
                   axisLabelVisible: false,
                   title: `${kind === 'support' ? 'S' : 'R'}${distinct.length - i} ${p.value.toFixed(instrument.decimals)}`,
@@ -259,7 +353,7 @@ export const Chart = forwardRef<ChartHandle, Props>(function Chart(
             data.map((c) => ({
               time: c.time as UTCTimestamp,
               value: c.volume,
-              color: c.close >= c.open ? '#2cc9a14d' : '#ef64764d',
+              color: (c.close >= c.open ? config.volume.upColor : config.volume.downColor) + '4d',
             }))
           )
         );
@@ -267,22 +361,33 @@ export const Chart = forwardRef<ChartHandle, Props>(function Chart(
       }
       if (indicators.rsi) {
         ++pane;
-        const r = line(rsi, '#b39aef', pane, 'RSI 14', 2);
+        const r = line(
+          (data) => rsi(data, config.rsi.period),
+          config.rsi.color,
+          pane,
+          `RSI ${config.rsi.period}`,
+          config.rsi.width
+        );
         r.applyOptions({
           autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 100 } }),
         });
-        for (const value of [30, 50, 70])
+        for (const value of [config.rsi.lower, 50, config.rsi.upper].filter(
+          (value, i, values) => values.indexOf(value) === i
+        ))
           r.createPriceLine({
             price: value,
             color: '#495168',
             lineWidth: 1,
             lineStyle: LineStyle.Dashed,
-            axisLabelVisible: value !== 50,
+            axisLabelVisible: value === config.rsi.lower || value === config.rsi.upper,
             title: '',
           });
-        paneLabels.push({ title: 'RSI 14', pane });
+        paneLabels.push({ title: `RSI ${config.rsi.period}`, pane });
       }
       if (indicators.macd) {
+        const oscillator = cachedCalculation((data) =>
+          macd(data, config.macd.fast, config.macd.slow, config.macd.signal)
+        );
         ++pane;
         const h = chart.addSeries(
           HistogramSeries,
@@ -291,21 +396,42 @@ export const Chart = forwardRef<ChartHandle, Props>(function Chart(
         );
         registerData((data) =>
           h.setData(
-            macd(data).histogram.map((p) => ({
+            oscillator(data).histogram.map((p) => ({
               ...p,
               time: p.time as UTCTimestamp,
-              color: p.value >= 0 ? '#2cc9a180' : '#ef647680',
+              color: (p.value >= 0 ? config.macd.positiveColor : config.macd.negativeColor) + '80',
             }))
           )
         );
-        line((data) => macd(data).macd, '#60a5fa', pane, 'MACD');
-        line((data) => macd(data).signal, '#f1ba65', pane, 'Signal');
-        paneLabels.push({ title: 'MACD 12 · 26 · 9', pane });
+        line(
+          (data) => oscillator(data).macd,
+          config.macd.macdColor,
+          pane,
+          'MACD',
+          config.macd.width
+        );
+        line(
+          (data) => oscillator(data).signal,
+          config.macd.signalColor,
+          pane,
+          'Signal',
+          config.macd.width
+        );
+        paneLabels.push({
+          title: `MACD ${config.macd.fast} · ${config.macd.slow} · ${config.macd.signal}`,
+          pane,
+        });
       }
       if (indicators.atr) {
         ++pane;
-        line(atr, '#dfc591', pane, 'ATR 14');
-        paneLabels.push({ title: 'ATR 14', pane });
+        line(
+          (data) => atr(data, config.atr.period),
+          config.atr.color,
+          pane,
+          `ATR ${config.atr.period}`,
+          config.atr.width
+        );
+        paneLabels.push({ title: `ATR ${config.atr.period}`, pane });
       }
       chart.panes().forEach((p, i) => p.setStretchFactor(i === 0 ? 5 : 1));
       paneLabels.forEach(({ title, pane: index }) => {
@@ -352,15 +478,8 @@ export const Chart = forwardRef<ChartHandle, Props>(function Chart(
       chart.subscribeCrosshairMove((param) => {
         if (param.time === hoverTime) return;
         hoverTime = param.time;
-        const data = param.seriesData.get(main) as Candle | undefined;
-        callbackRef.current.onHover(
-          data && 'open' in data
-            ? {
-                ...data,
-                volume: candlesRef.current.find((c) => c.time === param.time)?.volume ?? 0,
-              }
-            : null
-        );
+        const candle = candlesRef.current.find((c) => c.time === param.time);
+        callbackRef.current.onHover(candle ?? null);
       });
       const observer = new ResizeObserver(() => {
         if (!disposed) {
@@ -410,6 +529,8 @@ export const Chart = forwardRef<ChartHandle, Props>(function Chart(
     }
   }, [
     calendar,
+    configKey,
+    appearanceKey,
     instrument.decimals,
     indicators.ema,
     indicators.sma,

@@ -1,5 +1,7 @@
 # Tool coverage
 
+The table below describes the previous workspace/public v0.1.0 release. The development default now exposes Vela's registered catalogue and full property dialogs; see the [integrated workspace guide](WORKBENCH.md). Catalogue presence is not proof of numerical parity with TradingView.
+
 | Family            | Available in this release                                  | Interaction                                                   |
 | ----------------- | ---------------------------------------------------------- | ------------------------------------------------------------- |
 | Lines             | Trend, forward ray, horizontal, vertical, parallel channel | Two anchors; one for H/V; three for channel                   |
@@ -18,4 +20,4 @@ Not yet implemented: Gann tools, pitchfork variants, Elliott-wave/pattern tools,
 
 ## Study editor
 
-The JSON editor saves combinations of the eight tested built-in indicators. It validates version, name and boolean indicator settings, then stores a local preset. No imported code executes. A future typed plugin API should retain explicit data access, resource limits and compatibility/version checks.
+The JSON editor saves combinations and editable parameters/styles of the eight tested built-in indicators. Full indicator property dialogs expose the underlying periods, colors, widths, reference levels, smoothing inputs and pivot settings. It validates version, name and boolean indicator settings, then stores a local preset. No imported code executes. A future typed plugin API should retain explicit data access, resource limits and compatibility/version checks.

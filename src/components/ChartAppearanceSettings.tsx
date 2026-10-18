@@ -88,6 +88,7 @@ export function ChartAppearanceSettings({
             Chart type{' '}
             <select
               id={`${id}-type`}
+              aria-label="Chart type"
               value={draft.chartType}
               onChange={(event) => change('chartType', event.target.value as ChartType)}
             >
@@ -101,6 +102,7 @@ export function ChartAppearanceSettings({
             Chart font{' '}
             <select
               id={`${id}-font`}
+              aria-label="Chart font"
               value={draft.fontSize}
               onChange={(event) => change('fontSize', Number(event.target.value))}
             >

@@ -1,0 +1,34 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Signalhive — engine evaluation</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #0e1420;
+        color: #a9bbd5;
+        font: 13px system-ui;
+      }
+      header {
+        height: 38px;
+        box-sizing: border-box;
+        padding: 10px 16px;
+        border-bottom: 1px solid #29384b;
+      }
+      #chart {
+        height: calc(100% - 38px);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      Signalhive research · Vela + PineTS · Synthetic candles · Known scripts only · No orders
+    </header>
+    <div id="chart"></div>
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>

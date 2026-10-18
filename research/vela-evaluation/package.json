@@ -1,0 +1,9 @@
+{
+  "name": "signalhive-engine-eval",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@luxalgo/vela": "0.8.4"
+  },
+  "description": "Isolated evaluation, not the Signalhive product or a parity claim"
+}

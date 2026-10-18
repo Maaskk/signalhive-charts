@@ -2,6 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import type { Anchor, Drawing, Projection, Tool } from '../types';
 import {
+  clipExtendedLine,
+  drawingDash,
+  fibPriceAt,
+  resolveDrawingStyle,
+} from '../lib/drawingStyle';
+import {
   DRAWING_TOOL_STEPS,
   formatDuration,
   makeDrawing,
@@ -20,11 +26,10 @@ export interface DrawingOverlayProps {
   onChange: (drawings: Drawing[]) => void;
   onSelect: (id: string | null) => void;
   onToolChange: (tool: Tool) => void;
+  onProperties?: (id: string) => void;
 }
 type XY = { x: number; y: number };
 type Drag = { original: Drawing; start: Anchor; handle: number | null; pointerId: number };
-const green = '#2dd4a7',
-  red = '#fb7185';
 const priceText = (price: number) =>
   price.toLocaleString('en-US', { maximumFractionDigits: Math.abs(price) < 10 ? 5 : 2 });
 
@@ -35,6 +40,7 @@ function Label({
   color = '#d8e0ef',
   background = '#182131',
   align = 'start',
+  fontSize = 12,
 }: {
   x: number;
   y: number;
@@ -42,16 +48,18 @@ function Label({
   color?: string;
   background?: string;
   align?: 'start' | 'middle' | 'end';
+  fontSize?: number;
 }) {
-  const width = Math.max(36, text.length * 6.6 + 16);
+  const width = Math.max(36, text.length * fontSize * 0.61 + 16),
+    height = fontSize + 12;
   const left = align === 'middle' ? x - width / 2 : align === 'end' ? x - width : x;
   return (
     <g pointerEvents="none">
       <rect
         x={left}
-        y={y - 17}
+        y={y - fontSize - 6}
         width={width}
-        height={23}
+        height={height}
         rx={5}
         fill={background}
         fillOpacity={0.96}
@@ -60,7 +68,7 @@ function Label({
         x={left + 8}
         y={y - 2}
         fill={color}
-        fontSize={11}
+        fontSize={fontSize}
         fontWeight={500}
         fontFamily="Inter, system-ui, sans-serif"
       >
@@ -70,7 +78,8 @@ function Label({
   );
 }
 
-function Geometry({
+/** Shared rendered geometry; actual properties are applied to SVG rather than stored as decoration. */
+export function DrawingGeometry({
   drawing: d,
   projection: p,
   selected,
@@ -89,11 +98,14 @@ function Geometry({
     )
   )
     return null;
-  const pts = points as XY[];
-  const [a, b = a, c = b] = pts;
-  const color = d.color || '#879bff';
-  const strokeWidth = selected ? 2 : 1.6;
-  const line = (x1: number, y1: number, x2: number, y2: number, shade = color, dash?: string) => (
+  const pts = points as XY[],
+    [a, b = a, c = b] = pts;
+  const color = d.color || '#879bff',
+    style = resolveDrawingStyle(d),
+    dash = drawingDash(style.lineStyle);
+  const target = style.targetColor,
+    stop = style.stopColor;
+  const line = (x1: number, y1: number, x2: number, y2: number, shade = color) => (
     <>
       <line
         x1={x1}
@@ -101,7 +113,7 @@ function Geometry({
         x2={x2}
         y2={y2}
         stroke={shade}
-        strokeWidth={strokeWidth}
+        strokeWidth={style.lineWidth}
         strokeDasharray={dash}
         pointerEvents="none"
       />
@@ -116,54 +128,81 @@ function Geometry({
       />
     </>
   );
+  const extended = (first: XY, second: XY, shade = color) => {
+    const ends = clipExtendedLine(
+      first,
+      second,
+      p.width,
+      p.height,
+      style.extendLeft,
+      style.extendRight
+    );
+    return ends ? line(ends[0].x, ends[0].y, ends[1].x, ends[1].y, shade) : null;
+  };
+  const label = (
+    x: number,
+    y: number,
+    text: string,
+    shade = color,
+    align: 'start' | 'middle' | 'end' = 'start'
+  ) =>
+    style.showLabels ? (
+      <Label x={x} y={y} text={text} color={shade} align={align} fontSize={style.fontSize} />
+    ) : null;
+  const shapeStyle = {
+    fill: style.fillColor,
+    fillOpacity: style.fillOpacity,
+    stroke: color,
+    strokeWidth: style.lineWidth,
+    strokeDasharray: dash,
+    pointerEvents: draft ? ('none' as const) : ('all' as const),
+  };
   let content: ReactNode;
   switch (d.tool) {
     case 'horizontal':
       content = (
         <>
           {line(0, a.y, p.width, a.y)}
-          <Label
-            x={p.width - 8}
-            y={Math.max(20, a.y - 6)}
-            text={priceText(d.points[0].price)}
-            color={color}
-            align="end"
-          />
+          {label(
+            p.width - 8,
+            Math.max(style.fontSize + 10, a.y - 6),
+            `${d.text ? d.text + ' · ' : ''}${priceText(d.points[0].price)}`,
+            color,
+            'end'
+          )}
         </>
       );
       break;
     case 'vertical':
-      content = line(a.x, 0, a.x, p.height, color, '4 4');
+      content = (
+        <>
+          {line(a.x, 0, a.x, p.height)}
+          {label(
+            a.x + 6,
+            style.fontSize + 15,
+            new Date(d.points[0].time * 1000).toISOString().slice(0, 19).replace('T', ' ') + ' UTC'
+          )}
+        </>
+      );
       break;
-    case 'ray': {
-      const dx = b.x - a.x,
-        dy = b.y - a.y;
-      const scale =
-        Math.abs(dx) < 0.01
-          ? p.height / Math.max(1, Math.abs(dy)) + 2
-          : (dx > 0 ? p.width - a.x : -a.x) / dx;
-      content = line(a.x, a.y, a.x + dx * Math.max(1, scale), a.y + dy * Math.max(1, scale));
+    case 'ray':
+    case 'trend':
+      content = extended(a, b);
       break;
-    }
     case 'rectangle': {
-      const x = Math.min(a.x, b.x),
-        y = Math.min(a.y, b.y),
-        width = Math.max(1, Math.abs(b.x - a.x)),
-        height = Math.max(1, Math.abs(b.y - a.y));
+      const left = style.extendLeft ? 0 : Math.min(a.x, b.x),
+        right = style.extendRight ? p.width : Math.max(a.x, b.x),
+        top = Math.min(a.y, b.y);
       content = (
         <>
           <rect
-            x={x}
-            y={y}
-            width={width}
-            height={height}
-            fill={color}
-            fillOpacity={0.11}
-            stroke={color}
-            strokeWidth={strokeWidth}
-            pointerEvents={draft ? 'none' : 'all'}
+            x={left}
+            y={top}
+            width={Math.max(1, right - left)}
+            height={Math.max(1, Math.abs(b.y - a.y))}
+            {...shapeStyle}
           />
-          {d.text && <Label x={x + 7} y={y + 24} text={d.text} color={color} />}
+          {d.text && label(left + 7, top + style.fontSize + 12, d.text)}
         </>
       );
       break;
@@ -175,64 +214,67 @@ function Geometry({
           cy={(a.y + b.y) / 2}
           rx={Math.max(1, Math.abs(b.x - a.x) / 2)}
           ry={Math.max(1, Math.abs(b.y - a.y) / 2)}
-          fill={color}
-          fillOpacity={0.08}
-          stroke={color}
-          strokeWidth={strokeWidth}
-          pointerEvents={draft ? 'none' : 'all'}
+          {...shapeStyle}
         />
       );
       break;
     case 'fib': {
-      const levels = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
-      const left = Math.min(a.x, b.x),
-        right = Math.max(a.x, b.x);
+      const left = style.extendLeft ? 0 : Math.min(a.x, b.x),
+        right = style.extendRight ? p.width : Math.max(a.x, b.x);
       content = (
         <>
-          {levels.map((level, i) => {
-            const y = a.y + (b.y - a.y) * level;
-            const price = d.points[0].price + (d.points[1].price - d.points[0].price) * level;
-            const shade = [
-              '#8d9ab1',
-              '#ef9a76',
-              '#e8c776',
-              '#2dd4a7',
-              '#60c2e5',
-              '#a493ee',
-              '#8d9ab1',
-            ][i];
-            return (
-              <g key={level}>
-                {line(left, y, right, y, shade, '4 3')}
-                <text x={left + 5} y={y - 5} fill={shade} fontSize={10} pointerEvents="none">
-                  {level.toFixed(3)} · {priceText(price)}
-                </text>
-              </g>
-            );
-          })}
-          {line(a.x, a.y, b.x, b.y, color, '2 5')}
+          {style.fibLevels
+            .filter((level) => level.visible)
+            .map((level) => {
+              const y = fibPriceAt(a.y, b.y, level.value, style.reverseFib);
+              const price = fibPriceAt(
+                d.points[0].price,
+                d.points[1].price,
+                level.value,
+                style.reverseFib
+              );
+              return (
+                <g key={level.value} data-fib-ratio={level.value}>
+                  {line(left, y, right, y, level.color)}
+                  {style.showLabels && (
+                    <text
+                      x={left + 5}
+                      y={y - 5}
+                      fill={level.color}
+                      fontSize={style.fontSize}
+                      pointerEvents="none"
+                    >
+                      {level.value.toFixed(3)} · {priceText(price)}
+                    </text>
+                  )}
+                </g>
+              );
+            })}
+          {line(a.x, a.y, b.x, b.y)}
         </>
       );
       break;
     }
     case 'channel': {
       const dx = b.x - a.x,
-        dy = b.y - a.y;
-      const length2 = dx * dx + dy * dy;
+        dy = b.y - a.y,
+        length2 = dx * dx + dy * dy;
       const t = length2 ? ((c.x - a.x) * dx + (c.y - a.y) * dy) / length2 : 0;
       const ox = c.x - a.x - t * dx,
         oy = c.y - a.y - t * dy;
+      const ends = clipExtendedLine(a, b, p.width, p.height, style.extendLeft, style.extendRight);
+      const [first, second] = ends ?? [a, b];
       content = (
         <>
           <polygon
-            points={`${a.x},${a.y} ${b.x},${b.y} ${b.x + ox},${b.y + oy} ${a.x + ox},${a.y + oy}`}
-            fill={color}
-            fillOpacity={0.07}
+            points={`${first.x},${first.y} ${second.x},${second.y} ${second.x + ox},${second.y + oy} ${first.x + ox},${first.y + oy}`}
+            fill={style.fillColor}
+            fillOpacity={style.fillOpacity}
             pointerEvents={draft ? 'none' : 'all'}
           />
-          {line(a.x, a.y, b.x, b.y)}
-          {line(a.x + ox, a.y + oy, b.x + ox, b.y + oy)}
-          {line(a.x + ox / 2, a.y + oy / 2, b.x + ox / 2, b.y + oy / 2, color, '5 5')}
+          {extended(a, b)}
+          {extended({ x: a.x + ox, y: a.y + oy }, { x: b.x + ox, y: b.y + oy })}
+          {extended({ x: a.x + ox / 2, y: a.y + oy / 2 }, { x: b.x + ox / 2, y: b.y + oy / 2 })}
         </>
       );
       break;
@@ -240,11 +282,11 @@ function Geometry({
     case 'long':
     case 'short': {
       if (d.points.length < 3) {
-        content = line(a.x, a.y, b.x, b.y, color, '4 4');
+        content = line(a.x, a.y, b.x, b.y);
         break;
       }
-      const metrics = positionMetrics(d);
-      const left = Math.min(a.x, b.x),
+      const metrics = positionMetrics(d),
+        left = Math.min(a.x, b.x),
         width = Math.max(30, Math.abs(b.x - a.x)),
         right = left + width;
       content = (
@@ -254,49 +296,43 @@ function Geometry({
             y={Math.min(a.y, c.y)}
             width={width}
             height={Math.abs(c.y - a.y)}
-            fill={green}
-            fillOpacity={0.16}
-            stroke={green}
-            strokeOpacity={0.5}
-            pointerEvents={draft ? 'none' : 'all'}
+            {...shapeStyle}
+            fill={target}
+            stroke={target}
           />
           <rect
             x={left}
             y={Math.min(a.y, b.y)}
             width={width}
             height={Math.abs(b.y - a.y)}
-            fill={red}
-            fillOpacity={0.16}
-            stroke={red}
-            strokeOpacity={0.5}
-            pointerEvents={draft ? 'none' : 'all'}
+            {...shapeStyle}
+            fill={stop}
+            stroke={stop}
           />
-          {line(left, a.y, right, a.y, '#c4cede')}
-          {line(left, b.y, right, b.y, red)}
-          {line(left, c.y, right, c.y, green)}
-          <Label
-            x={left + width / 2}
-            y={Math.max(19, c.y - 7)}
-            align="middle"
-            text={`TARGET ${priceText(d.points[2].price)}`}
-            color={green}
-            background="#15382f"
-          />
-          <Label
-            x={left + width / 2}
-            y={Math.min(p.height - 8, b.y + 24)}
-            align="middle"
-            text={`STOP ${priceText(d.points[1].price)}`}
-            color={red}
-            background="#3c222b"
-          />
-          <Label
-            x={left + width / 2}
-            y={a.y - 7}
-            align="middle"
-            text={`${d.tool.toUpperCase()} · ${priceText(d.points[0].price)} · ${metrics.valid ? `R/R 1:${metrics.ratio!.toFixed(2)}` : 'INVALID LEVELS'}`}
-            color={metrics.valid ? '#e0e7f5' : red}
-          />
+          {line(left, a.y, right, a.y, color)}
+          {line(left, b.y, right, b.y, stop)}
+          {line(left, c.y, right, c.y, target)}
+          {label(
+            left + width / 2,
+            Math.max(style.fontSize + 8, c.y - 7),
+            `TARGET ${priceText(d.points[2].price)}`,
+            target,
+            'middle'
+          )}
+          {label(
+            left + width / 2,
+            Math.min(p.height - 8, b.y + style.fontSize + 12),
+            `STOP ${priceText(d.points[1].price)}`,
+            stop,
+            'middle'
+          )}
+          {label(
+            left + width / 2,
+            a.y - 7,
+            `${d.tool.toUpperCase()} · ${priceText(d.points[0].price)} · ${metrics.valid ? `R/R 1:${metrics.ratio!.toFixed(2)}` : 'INVALID LEVELS'}`,
+            metrics.valid ? '#e0e7f5' : stop,
+            'middle'
+          )}
         </>
       );
       break;
@@ -307,16 +343,16 @@ function Geometry({
         <g>
           <rect
             x={a.x - 4}
-            y={a.y - 20}
-            width={Math.max(60, text.length * 7.5 + 14)}
-            height={28}
+            y={a.y - style.fontSize - 7}
+            width={Math.max(60, text.length * style.fontSize * 0.61 + 16)}
+            height={style.fontSize + 14}
             rx={5}
-            fill="#182131"
-            fillOpacity={0.9}
+            fill={style.fillColor}
+            fillOpacity={style.fillOpacity}
             stroke={selected ? color : 'transparent'}
             pointerEvents={draft ? 'none' : 'all'}
           />
-          <text x={a.x + 4} y={a.y - 2} fill={color} fontSize={13} pointerEvents="none">
+          <text x={a.x + 4} y={a.y - 2} fill={color} fontSize={style.fontSize} pointerEvents="none">
             {text}
           </text>
         </g>
@@ -325,7 +361,6 @@ function Geometry({
     }
     case 'measure': {
       const measure = measureBetween(d.points[0], d.points[1] ?? d.points[0]);
-      const text = `${measure.change >= 0 ? '+' : ''}${priceText(measure.change)} (${measure.percent?.toFixed(2) ?? '—'}%) · ${formatDuration(measure.seconds)}`;
       content = (
         <>
           <rect
@@ -333,36 +368,28 @@ function Geometry({
             y={Math.min(a.y, b.y)}
             width={Math.max(1, Math.abs(b.x - a.x))}
             height={Math.max(1, Math.abs(b.y - a.y))}
-            fill={color}
-            fillOpacity={0.08}
-            stroke={color}
-            strokeDasharray="4 3"
-            pointerEvents={draft ? 'none' : 'all'}
+            {...shapeStyle}
           />
-          {line(a.x, a.y, b.x, b.y, color, '3 4')}
-          <Label
-            x={(a.x + b.x) / 2}
-            y={Math.min(a.y, b.y) - 8}
-            text={text}
-            align="middle"
-            color={color}
-          />
+          {line(a.x, a.y, b.x, b.y)}
+          {label(
+            (a.x + b.x) / 2,
+            Math.min(a.y, b.y) - 8,
+            `${measure.change >= 0 ? '+' : ''}${priceText(measure.change)} (${measure.percent?.toFixed(2) ?? '—'}%) · ${formatDuration(measure.seconds)}`,
+            color,
+            'middle'
+          )}
         </>
       );
       break;
     }
     case 'arrow': {
       const angle = Math.atan2(b.y - a.y, b.x - a.x),
-        length = 12;
-      const x1 = b.x - length * Math.cos(angle - 0.45),
-        y1 = b.y - length * Math.sin(angle - 0.45);
-      const x2 = b.x - length * Math.cos(angle + 0.45),
-        y2 = b.y - length * Math.sin(angle + 0.45);
+        length = 10 + style.lineWidth * 2;
       content = (
         <>
           {line(a.x, a.y, b.x, b.y)}
           <polygon
-            points={`${b.x},${b.y} ${x1},${y1} ${x2},${y2}`}
+            points={`${b.x},${b.y} ${b.x - length * Math.cos(angle - 0.45)},${b.y - length * Math.sin(angle - 0.45)} ${b.x - length * Math.cos(angle + 0.45)},${b.y - length * Math.sin(angle + 0.45)}`}
             fill={color}
             pointerEvents="none"
           />
@@ -373,7 +400,14 @@ function Geometry({
     default:
       content = line(a.x, a.y, b.x, b.y);
   }
-  return <g opacity={draft ? 0.7 : 1}>{content}</g>;
+  return (
+    <g opacity={draft ? 0.7 : 1}>
+      {content}
+      {d.text &&
+        !['rectangle', 'text', 'horizontal'].includes(d.tool) &&
+        label(a.x + 7, a.y - 10, d.text)}
+    </g>
+  );
 }
 
 export function DrawingOverlay(props: DrawingOverlayProps) {
@@ -535,10 +569,15 @@ export function DrawingOverlay(props: DrawingOverlayProps) {
             <g
               key={d.id}
               onPointerDown={(e) => startDrag(e, d)}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                onSelect(d.id);
+                props.onProperties?.(d.id);
+              }}
               style={{ cursor: d.locked ? 'default' : 'grab' }}
               data-drawing-id={d.id}
             >
-              <Geometry drawing={d} projection={projection} selected={selected} />
+              <DrawingGeometry drawing={d} projection={projection} selected={selected} />
               {selected &&
                 !d.locked &&
                 d.points.map((point, i) => {
@@ -561,9 +600,9 @@ export function DrawingOverlay(props: DrawingOverlayProps) {
                         stroke={
                           d.tool === 'long' || d.tool === 'short'
                             ? i === 1
-                              ? red
+                              ? resolveDrawingStyle(d).stopColor
                               : i === 2
-                                ? green
+                                ? resolveDrawingStyle(d).targetColor
                                 : '#c4cede'
                             : d.color
                         }
@@ -577,7 +616,7 @@ export function DrawingOverlay(props: DrawingOverlayProps) {
         })}
       {preview && (
         <g pointerEvents="none">
-          <Geometry drawing={preview} projection={projection} selected={false} draft />
+          <DrawingGeometry drawing={preview} projection={projection} selected={false} draft />
         </g>
       )}
       {tool !== 'cursor' && (

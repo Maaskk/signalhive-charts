@@ -2091,3 +2091,50 @@ kbd {
 .order-estimate + .microcopy {
   margin-top: 5px;
 }
+
+.size-button {
+  font-size: 9px;
+  margin-top: 8px;
+}
+.partial-label {
+  margin: 20px 0;
+}
+.paper-levels {
+  touch-action: none;
+}
+
+.indicator-strip .indicator-tag {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #99a6bf;
+  height: 20px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.indicator-tag i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+}
+.library-tabs .settings-link {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 10px;
+}
+.settings-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-bottom: 17px;
+}
+.indicator-fields label {
+  font-size: 11px;
+}
+.drawing-settings input[type='color'],
+.indicator-settings input[type='color'] {
+  width: 100%;
+  max-width: 95px;
+}

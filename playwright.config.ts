@@ -1,7 +1,8 @@
 import { defineConfig } from '@playwright/test';
 import { existsSync } from 'node:fs';
 
-const executablePath = process.env.CHROMIUM_PATH || (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined);
+const executablePath =
+  process.env.CHROMIUM_PATH || (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined);
 
 export default defineConfig({
   testDir: './tests',
@@ -11,9 +12,9 @@ export default defineConfig({
   workers: 1,
   reporter: 'list',
   webServer: {
-    command: 'npm run dev',
+    command: process.env.SIGNALHIVE_TEST_PRODUCTION ? 'npm run preview' : 'npm run dev',
     url: 'http://127.0.0.1:1420',
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: !process.env.CI && !process.env.SIGNALHIVE_TEST_PRODUCTION,
     timeout: 30_000,
   },
   use: {

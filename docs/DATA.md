@@ -1,8 +1,12 @@
 # Data, indicators and paper execution
 
-## No live feed
+The numerical conventions below describe the previous workspace's independent implementation. The development default runs bundled studies in PineTS and uses Vela drawing calculations. Its full numerical equivalence to either this implementation or TradingView has not been certified. Sources and limitations are described in the [workspace guide](WORKBENCH.md).
+
+## Starting data and optional local feed
 
 The three starting instruments are synthetic examples with a fixed historical time window. Their names and scales are convenient for UI testing; prices and volumes are not historical market records or executable quotes. Every timeframe aggregates the same seeded five-minute path.
+
+An optional read-only MT5 demo adapter provides local broker candles and quote/account metadata. It neither authenticates an account nor sends orders; an existing terminal must already be open. Quote age is explicitly reported independently from snapshot age. Paper execution remains separate.
 
 CSV files are validated locally. A user can choose any source; the app does not establish its accuracy, exchange permissions or completeness. Gaps are retained. The chart compresses gaps in its trading calendar, and drawings interpolate against actual candle times rather than assuming every interval exists.
 
@@ -36,3 +40,5 @@ Entries fill at the currently revealed candle's close. SL/TP checks begin on str
 Changing symbol, timeframe, imported source or rewinding replay is blocked while a position is open. This prevents accidentally repricing an existing position with another market or replaying an earlier entry state. Open and closed positions persist with their source and replay cursor on the same device. Client-side storage is structurally checked, not cryptographically tamper-proof.
 
 Local replay alerts trigger on closing-price crossings while this window is open. They are not persistent push, phone or broker alerts.
+
+MT5 mode is analysis only: paper order entry is unavailable while connected. Disconnect in Settings to use synthetic replay or imported CSV for virtual trading. This prevents saved replay positions from being repriced against an unrelated source after relaunch.

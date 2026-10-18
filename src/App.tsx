@@ -1,3 +1,5 @@
+import { version as APP_VERSION } from '../package.json';
+import './styles.css';
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import {
   Activity,
@@ -56,6 +58,7 @@ import type {
 } from './types';
 import { Chart, type ChartHandle } from './components/Chart';
 import { DrawingOverlay } from './components/DrawingOverlay';
+import { PaperLevels } from './components/PaperLevels';
 import { Modal } from './components/Modal';
 import {
   INSTRUMENTS,
@@ -72,6 +75,9 @@ import {
   paperSummary,
   parsePaperAccount,
   processPaperCandle,
+  calculatePaperSize,
+  partialClosePaperPosition,
+  amendPaperPosition,
   type PaperAccount,
 } from './lib/paper';
 import {
@@ -83,6 +89,24 @@ import {
   parseWorkspace,
 } from './lib/workspace';
 import { volumeProfile } from './lib/volumeProfile';
+import {
+  DEFAULT_INDICATOR_CONFIG,
+  parseIndicatorConfig,
+  type IndicatorConfig,
+} from './lib/indicatorConfig';
+import {
+  DEFAULT_CHART_APPEARANCE,
+  parseChartAppearance,
+  type ChartAppearance,
+} from './lib/chartAppearance';
+import { IndicatorSettings as IndicatorSettingsEditor } from './components/IndicatorSettings';
+import { ChartAppearanceSettings } from './components/ChartAppearanceSettings';
+import { DrawingSettings } from './components/DrawingSettings';
+import {
+  parseMT5Snapshot,
+  mt5SnapshotFreshness,
+  type MT5ConnectedSnapshot,
+} from './lib/mt5Snapshot';
 
 const TIMEFRAMES: Timeframe[] = ['5m', '15m', '1h', '4h', '1D'];
 const TOOL_ITEMS: {
@@ -215,7 +239,7 @@ const LIBRARY: {
 }[] = [
   {
     id: 'ema',
-    name: 'EMA 9 / 21 / 200',
+    name: 'Exponential moving averages',
     category: 'Trend',
     description: 'Blue 9, yellow 21, red 200. SMA-seeded close-price averages.',
     color: '#29b6f6',
@@ -339,11 +363,20 @@ export default function App() {
   const [symbol, setSymbol] = useState<InstrumentId>(session.symbol);
   const [timeframe, setTimeframe] = useState<Timeframe>(session.timeframe);
   const [indicators, setIndicators] = useState<IndicatorSettings>(saved.indicators);
+  const [indicatorConfig, setIndicatorConfig] = useState<IndicatorConfig>(
+    saved.config ?? DEFAULT_INDICATOR_CONFIG
+  );
+  const [appearance, setAppearance] = useState<ChartAppearance>(
+    saved.appearance ?? { ...DEFAULT_CHART_APPEARANCE }
+  );
   const [drawingMap, setDrawingMap] = useState<Partial<Record<InstrumentId, Drawing[]>>>(
     saved.drawings
   );
   const [paper, setPaper] = useState<PaperAccount>(session.paper);
   const [imported, setImported] = useState<Candle[] | null>(session.imported);
+  const [mt5Snapshot, setMT5Snapshot] = useState<MT5ConnectedSnapshot | null>(null);
+  const [usingMT5, setUsingMT5] = useState(false);
+  const [mt5Issue, setMT5Issue] = useState('');
   const [replay, setReplay] = useState<number | null>(session.replay);
   const [playing, setPlaying] = useState(false);
   const [tool, setTool] = useState<Tool>('cursor');
@@ -351,19 +384,46 @@ export default function App() {
   const [selected, setSelected] = useState<string | null>(null);
   const [projection, setProjection] = useState<Projection | null>(null);
   const [hover, setHover] = useState<Candle | null>(null);
-  const [sidebar, setSidebar] = useState(true);
+  const [sidebar, setSidebar] = useState(() => window.innerWidth > 760);
   const [tab, setTab] = useState<'watchlist' | 'drawings' | 'alerts'>('watchlist');
   const [bottom, setBottom] = useState<'paper' | 'journal' | null>('paper');
   const [dialog, setDialog] = useState<
-    'library' | 'symbols' | 'help' | 'settings' | 'tools' | 'workspace' | null
+    | 'library'
+    | 'symbols'
+    | 'help'
+    | 'settings'
+    | 'tools'
+    | 'workspace'
+    | 'partial'
+    | 'indicator-settings'
+    | 'appearance'
+    | 'drawing-properties'
+    | null
   >(null);
+  const [partialId, setPartialId] = useState<string | null>(null);
+  const [partialLots, setPartialLots] = useState('');
   const [query, setQuery] = useState('');
   const [libraryTab, setLibraryTab] = useState<'indicators' | 'presets' | 'scripts'>('indicators');
   const [script, setScript] = useState(
-    JSON.stringify({ version: 1, name: 'My study', indicators: DEFAULT_INDICATORS }, null, 2)
+    JSON.stringify(
+      {
+        version: 1,
+        name: 'My study',
+        indicators: DEFAULT_INDICATORS,
+        config: indicatorConfig,
+        appearance,
+      },
+      null,
+      2
+    )
   );
   const [customPresets, setCustomPresets] = useState<
-    { name: string; indicators: IndicatorSettings }[]
+    {
+      name: string;
+      indicators: IndicatorSettings;
+      config?: IndicatorConfig;
+      appearance?: ChartAppearance;
+    }[]
   >(() =>
     loadJSON(
       'signalhive-presets-v1',
@@ -371,13 +431,18 @@ export default function App() {
         if (!Array.isArray(value) || value.length > 30) throw new Error('Invalid presets');
         return value.map((p) => {
           if (!p || typeof p.name !== 'string') throw new Error('Invalid name');
-          return { name: p.name.slice(0, 60), indicators: parseIndicators(p.indicators) };
+          return {
+            name: p.name.slice(0, 60),
+            indicators: parseIndicators(p.indicators),
+            config: p.config === undefined ? undefined : parseIndicatorConfig(p.config),
+            appearance: p.appearance === undefined ? undefined : parseChartAppearance(p.appearance),
+          };
         });
       },
       []
     )
   );
-  const [grid, setGrid] = useState(true);
+  const [grid, setGrid] = useState(saved.grid ?? true);
   const [message, setMessage] = useState('');
   const [side, setSide] = useState<'buy' | 'sell'>('buy');
   const [lots, setLots] = useState('0.01');
@@ -399,8 +464,11 @@ export default function App() {
     workspaceInput = useRef<HTMLInputElement>(null);
   const instrument = INSTRUMENT_BY_ID[symbol];
   const data = useMemo(
-    () => imported ?? generateCandles(symbol, timeframe),
-    [imported, symbol, timeframe]
+    () =>
+      usingMT5 && mt5Snapshot
+        ? mt5Snapshot.candles
+        : (imported ?? generateCandles(symbol, timeframe)),
+    [usingMT5, mt5Snapshot?.candles, imported, symbol, timeframe]
   );
   const candles = useMemo(
     () => (replay === null ? data : data.slice(0, Math.max(2, Math.min(replay, data.length)))),
@@ -424,6 +492,7 @@ export default function App() {
   const orderRisk = Math.abs(last.close - Number(stop)) * Number(lots) * instrument.contractSize;
   const orderMargin =
     (last.close * Number(lots) * instrument.contractSize) / paper.settings.leverage;
+  const brokerFreshness = mt5Snapshot ? mt5SnapshotFreshness(mt5Snapshot, Date.now() / 1000) : null;
   const activeTool = TOOL_ITEMS.find((t) => t.id === tool)!;
   const profileRange = drawings.find((d) => d.id === profileRangeId);
   const rangeStart = profileRange
@@ -445,6 +514,99 @@ export default function App() {
   const vp = profileResult.data;
 
   const notify = useCallback((text: string) => setMessage(text), []);
+  const localDesktop = location.port === '18743' || '__TAURI_INTERNALS__' in window;
+  const sourceContext = useRef({ positions: paper.positions.length, imported });
+  sourceContext.current = { positions: paper.positions.length, imported };
+  const installMT5Snapshot = (next: MT5ConnectedSnapshot) => {
+    if (next.symbol !== 'XAUUSD' || next.timeframe !== '15m')
+      throw new Error('This local adapter currently exposes XAUUSD 15m only.');
+    setMT5Snapshot((previous) =>
+      previous && JSON.stringify(previous.candles) === JSON.stringify(next.candles)
+        ? { ...next, candles: previous.candles }
+        : next
+    );
+    setMT5Issue('');
+  };
+  const connectMT5 = async (quiet = false) => {
+    if (paper.positions.length || imported) {
+      if (!quiet)
+        notify('Close paper positions and return to simulated data before connecting MT5.');
+      return;
+    }
+    try {
+      const response = await fetch('http://127.0.0.1:18743/api/mt5', {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(4000),
+      });
+      if (!response.ok)
+        throw new Error('Open the local MT5 app first; the read-only adapter is unavailable.');
+      const next = parseMT5Snapshot(await response.json());
+      if (!next.connected) throw new Error(`MT5 adapter: ${next.error}`);
+      if (sourceContext.current.positions || sourceContext.current.imported)
+        throw new Error(
+          'MT5 connection cancelled: the active paper or CSV session must stay on its original data.'
+        );
+      if (mt5SnapshotFreshness(next, Date.now() / 1000).snapshotStale)
+        throw new Error('The local MT5 snapshot is stale. Reopen MT5 and reconnect.');
+      installMT5Snapshot(next);
+      setSymbol('XAUUSD');
+      setTimeframe('15m');
+      setReplay(null);
+      setPlaying(false);
+      setUsingMT5(true);
+      if (!quiet)
+        notify(
+          'Connected to local MT5 prices and read-only account information. Use replay or imported CSV for paper trading.'
+        );
+    } catch (e) {
+      setMT5Issue(e instanceof Error ? e.message : 'Local MT5 adapter unavailable.');
+      if (!quiet) notify(e instanceof Error ? e.message : 'Local MT5 adapter unavailable.');
+    }
+  };
+  useEffect(() => {
+    if (localDesktop && !paper.positions.length && !imported) void connectMT5(true);
+    // Probe once at startup only; an explicit connection controls further polling.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    if (!usingMT5) return;
+    let stopped = false,
+      busy = false;
+    let controller: AbortController | null = null;
+    const tick = async () => {
+      if (busy) return;
+      busy = true;
+      controller = new AbortController();
+      const timeout = setTimeout(() => controller?.abort(), 4000);
+      try {
+        const response = await fetch('http://127.0.0.1:18743/api/mt5', {
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error('MT5 adapter disconnected; showing the last snapshot.');
+        const next = parseMT5Snapshot(await response.json());
+        if (!next.connected) throw new Error(`MT5 ${next.error}; showing the last snapshot.`);
+        if (!stopped) installMT5Snapshot(next);
+      } catch (e) {
+        if (!stopped)
+          setMT5Issue(
+            e instanceof Error ? e.message : 'MT5 disconnected; showing the last snapshot.'
+          );
+      } finally {
+        clearTimeout(timeout);
+        busy = false;
+      }
+    };
+    const timer = setInterval(() => void tick(), 2000);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      controller?.abort();
+    };
+    // Local read-only snapshots never replace failed requests with simulated prices.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [usingMT5]);
+
   useEffect(() => {
     if (!message) return;
     const t = setTimeout(() => setMessage(''), 6500);
@@ -455,14 +617,23 @@ export default function App() {
       try {
         localStorage.setItem(
           'signalhive-workspace-v1',
-          JSON.stringify({ version: 1, symbol, timeframe, indicators, drawings: drawingMap })
+          JSON.stringify({
+            version: 1,
+            symbol,
+            timeframe,
+            indicators,
+            config: indicatorConfig,
+            appearance,
+            grid,
+            drawings: drawingMap,
+          })
         );
       } catch {
         notify('Workspace storage is full. Export a backup from the workspace menu.');
       }
     }, 250);
     return () => clearTimeout(t);
-  }, [symbol, timeframe, indicators, drawingMap, notify]);
+  }, [symbol, timeframe, indicators, indicatorConfig, appearance, grid, drawingMap, notify]);
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -619,6 +790,10 @@ export default function App() {
   }, [dialog, undo, redo, deleteSelected]);
 
   const changeMarket = (id: InstrumentId, tf = timeframe) => {
+    if (usingMT5) {
+      notify('Disconnect the local MT5 source in Settings before changing markets or timeframes.');
+      return;
+    }
     if (paper.positions.length) {
       notify('Close your paper positions before changing symbol, timeframe or data source.');
       return;
@@ -635,6 +810,10 @@ export default function App() {
     setDialog(null);
   };
   const startReplay = () => {
+    if (usingMT5) {
+      notify('Disconnect the read-only MT5 source to use historical replay.');
+      return;
+    }
     if (replay === null || replay >= data.length) {
       if (paper.positions.length) {
         notify('Close paper positions before rewinding replay.');
@@ -645,6 +824,7 @@ export default function App() {
     setPlaying((p) => !p);
   };
   const stepReplay = () => {
+    if (usingMT5) return;
     if (replay === null || replay >= data.length) {
       if (paper.positions.length) {
         notify('Close paper positions before rewinding replay.');
@@ -654,6 +834,10 @@ export default function App() {
     } else setReplay((n) => Math.min((n ?? 0) + 1, data.length));
   };
   const openPaper = () => {
+    if (usingMT5) {
+      notify('MT5 is view-only. Disconnect in Settings to practice with replay or imported CSV.');
+      return;
+    }
     try {
       setPaper(
         openPaperPosition(
@@ -681,6 +865,7 @@ export default function App() {
     if (!file) return;
     try {
       if (paper.positions.length) throw new Error('Close paper positions before changing data.');
+      if (usingMT5) throw new Error('Disconnect MT5 in Settings before importing CSV.');
       if (file.size > 15_000_000) throw new Error('CSV limit is 15 MB.');
       const parsed = parseCSV(await file.text());
       if (parsed.length < 2) throw new Error('Import at least two candles.');
@@ -703,11 +888,15 @@ export default function App() {
     try {
       if (paper.positions.length)
         throw new Error('Close paper positions before loading a workspace.');
+      if (usingMT5) throw new Error('Disconnect MT5 in Settings before loading a workspace.');
       if (file.size > 2_000_000) throw new Error('Workspace limit is 2 MB.');
       const value = parseWorkspace(JSON.parse(await file.text()));
       setSymbol(value.symbol);
       setTimeframe(value.timeframe);
       setIndicators(value.indicators);
+      setIndicatorConfig(value.config ?? DEFAULT_INDICATOR_CONFIG);
+      setAppearance(value.appearance ?? { ...DEFAULT_CHART_APPEARANCE });
+      setGrid(value.grid ?? true);
       setDrawingMap(value.drawings);
       setImported(null);
       setReplay(null);
@@ -731,11 +920,15 @@ export default function App() {
       const parsed = {
         name: v.name.trim().slice(0, 60),
         indicators: parseIndicators(v.indicators),
+        config: v.config === undefined ? indicatorConfig : parseIndicatorConfig(v.config),
+        appearance: v.appearance === undefined ? appearance : parseChartAppearance(v.appearance),
       };
       const next = [...customPresets.filter((p) => p.name !== parsed.name), parsed].slice(-30);
       localStorage.setItem('signalhive-presets-v1', JSON.stringify(next));
       setCustomPresets(next);
       setIndicators(parsed.indicators);
+      setIndicatorConfig(parsed.config);
+      setAppearance(parsed.appearance);
       notify(`Saved and applied “${parsed.name}”.`);
     } catch (e) {
       notify(e instanceof Error ? e.message : 'Invalid study preset.');
@@ -824,6 +1017,7 @@ export default function App() {
         <span className="toolbar-divider" />
         <button
           className="toolbar-button"
+          aria-label="Indicators"
           onClick={() => {
             setDialog('library');
             setQuery('');
@@ -834,6 +1028,7 @@ export default function App() {
         </button>
         <button
           className="toolbar-button"
+          aria-label="Studies"
           onClick={() => {
             setLibraryTab('presets');
             setDialog('library');
@@ -844,6 +1039,7 @@ export default function App() {
         </button>
         <button
           className={`toolbar-button ${replay !== null ? 'accent-text' : ''}`}
+          aria-label="Replay"
           onClick={startReplay}
         >
           {playing ? <Pause size={15} /> : <Play size={15} />}
@@ -971,7 +1167,12 @@ export default function App() {
                   {instrument.name} <span>· {imported ? 'CSV' : timeframe}</span>
                 </h1>
                 <p>
-                  {imported ? 'Imported OHLCV' : 'Simulated market'} <span>· UTC</span>
+                  {usingMT5
+                    ? 'MT5 demo · read-only'
+                    : imported
+                      ? 'Imported OHLCV'
+                      : 'Simulated market'}{' '}
+                  <span>· UTC</span>
                 </p>
               </div>
             </div>
@@ -988,25 +1189,22 @@ export default function App() {
             </div>
           </div>
           <div className="indicator-strip">
-            {indicators.ema ? (
-              <>
-                <span>
-                  <i style={{ background: '#29b6f6' }} />
-                  EMA 9
-                </span>
-                <span>
-                  <i style={{ background: '#facc15' }} />
-                  EMA 21
-                </span>
-                <span>
-                  <i style={{ background: '#ef5350' }} />
-                  EMA 200
-                </span>
-              </>
-            ) : null}
+            {indicators.ema
+              ? indicatorConfig.ema.periods.map((period, index) => (
+                  <button
+                    className="indicator-tag"
+                    key={index}
+                    title="Edit EMA periods and colors"
+                    onClick={() => setDialog('indicator-settings')}
+                  >
+                    <i style={{ background: indicatorConfig.ema.colors[index] }} />
+                    EMA {period}
+                  </button>
+                ))
+              : null}
             {indicators.levels ? (
               <span className="muted">
-                <i style={{ background: '#2cc9a1' }} />
+                <i style={{ background: indicatorConfig.levels.supportColor }} />
                 Confirmed S/R
               </span>
             ) : null}
@@ -1020,7 +1218,17 @@ export default function App() {
             >
               <Plus size={13} />
             </button>
-            <span className="data-label">{imported ? 'CSV DATA' : 'SIMULATED DATA'}</span>
+            <span className="data-label">
+              {usingMT5
+                ? mt5Issue || brokerFreshness?.snapshotStale
+                  ? 'MT5 · DISCONNECTED'
+                  : brokerFreshness?.quoteStale
+                    ? 'MT5 · STALE QUOTE'
+                    : 'MT5 · READ ONLY'
+                : imported
+                  ? 'CSV DATA'
+                  : 'SIMULATED DATA'}
+            </span>
           </div>
           <div className="chart-stage" data-testid="chart-stage">
             <Chart
@@ -1028,6 +1236,8 @@ export default function App() {
               candles={candles}
               instrument={instrument}
               indicators={indicators}
+              config={indicatorConfig}
+              appearance={appearance}
               grid={grid}
               onProjection={setProjection}
               onHover={setHover}
@@ -1104,6 +1314,26 @@ export default function App() {
                 onChange={changeDrawings}
                 onSelect={setSelected}
                 onToolChange={setTool}
+                onProperties={(id) => {
+                  setSelected(id);
+                  setTool('cursor');
+                  setDialog('drawing-properties');
+                }}
+              />
+            ) : null}
+            {projection && paper.positions.length ? (
+              <PaperLevels
+                projection={projection}
+                positions={paper.positions}
+                decimals={instrument.decimals}
+                onAmend={(id, patch) => {
+                  try {
+                    setPaper(amendPaperPosition(paper, id, patch, marks));
+                    notify('Paper stop / target updated.');
+                  } catch (e) {
+                    notify(e instanceof Error ? e.message : 'Paper level could not be changed.');
+                  }
+                }}
               />
             ) : null}
             <div className="chart-navigation">
@@ -1191,7 +1421,24 @@ export default function App() {
                 <ChevronDown size={15} style={{ transform: bottom ? '' : 'rotate(180deg)' }} />
               </button>
             </div>
-            {bottom === 'paper' ? (
+            {bottom === 'paper' && usingMT5 ? (
+              <div className="paper-content">
+                <div className="paper-order">
+                  <span className="eyebrow">MT5 · VIEW ONLY</span>
+                  <p>
+                    Analyze broker prices and draw on the chart here. Open and close broker trades
+                    in MT5.
+                  </p>
+                  <p className="microcopy">
+                    For virtual paper trading, disconnect this source in Settings and use replay or
+                    imported CSV.
+                  </p>
+                  <button className="secondary-button" onClick={() => setDialog('settings')}>
+                    Data source settings
+                  </button>
+                </div>
+              </div>
+            ) : bottom === 'paper' ? (
               <div className="paper-content">
                 <div className="paper-order">
                   <div className="order-title">
@@ -1248,6 +1495,32 @@ export default function App() {
                       Place paper order
                     </button>
                   </div>
+                  <button
+                    className="text-button size-button"
+                    onClick={() => {
+                      const result = calculatePaperSize(
+                        paper,
+                        {
+                          instrument: symbol,
+                          side,
+                          price: last.close,
+                          stopLoss: Number(stop),
+                          takeProfit: Number(target),
+                        },
+                        marks
+                      );
+                      if (result.lots === null)
+                        notify(result.reason ?? 'No permitted paper size fits.');
+                      else {
+                        setLots(result.lots.toString());
+                        notify(
+                          `Sized ${result.lots} lots: estimated risk ${money(result.risk)}, margin ${money(result.margin)}.`
+                        );
+                      }
+                    }}
+                  >
+                    Auto-size to risk budget
+                  </button>
                   <p className="order-estimate">
                     <span
                       className={
@@ -1285,6 +1558,20 @@ export default function App() {
                         <span>
                           SL {p.stopLoss} · TP {p.takeProfit}
                         </span>
+                        <button
+                          className="text-button"
+                          disabled={p.lots < 2 * INSTRUMENT_BY_ID[p.instrument].minLots - 1e-12}
+                          onClick={() => {
+                            const step = INSTRUMENT_BY_ID[p.instrument].lotStep;
+                            setPartialId(p.id);
+                            setPartialLots(
+                              Number((Math.floor(p.lots / 2 / step) * step).toFixed(8)).toString()
+                            );
+                            setDialog('partial');
+                          }}
+                        >
+                          Close part
+                        </button>
                         <button
                           className="text-button"
                           onClick={() => {
@@ -1414,33 +1701,35 @@ export default function App() {
               <>
                 <div className="side-heading">
                   <h2>Watchlist</h2>
-                  <span className="subtle-tag">SIMULATED</span>
+                  <span className="subtle-tag">{usingMT5 ? 'MT5 READ ONLY' : 'SIMULATED'}</span>
                 </div>
                 <div className="watchlist-labels">
                   <span>Symbol</span>
                   <span>Last / change</span>
                 </div>
-                {watchRows.map(({ instrument: i, end, pct }) => {
-                  return (
-                    <button
-                      className={`watch-row ${i.id === symbol ? 'selected' : ''}`}
-                      key={i.id}
-                      onClick={() => changeMarket(i.id)}
-                    >
-                      <div>
-                        <strong>{i.id}</strong>
-                        <small>{i.name}</small>
-                      </div>
-                      <div>
-                        <strong>{end.close.toFixed(i.decimals)}</strong>
-                        <small className={pct >= 0 ? 'positive' : 'negative'}>
-                          {pct >= 0 ? '+' : ''}
-                          {pct.toFixed(2)}%
-                        </small>
-                      </div>
-                    </button>
-                  );
-                })}
+                {watchRows
+                  .filter((row) => !usingMT5 || row.instrument.id === symbol)
+                  .map(({ instrument: i, end, pct }) => {
+                    return (
+                      <button
+                        className={`watch-row ${i.id === symbol ? 'selected' : ''}`}
+                        key={i.id}
+                        onClick={() => changeMarket(i.id)}
+                      >
+                        <div>
+                          <strong>{i.id}</strong>
+                          <small>{i.name}</small>
+                        </div>
+                        <div>
+                          <strong>{end.close.toFixed(i.decimals)}</strong>
+                          <small className={pct >= 0 ? 'positive' : 'negative'}>
+                            {pct >= 0 ? '+' : ''}
+                            {pct.toFixed(2)}%
+                          </small>
+                        </div>
+                      </button>
+                    );
+                  })}
                 <div className="side-instrument">
                   <span className={`symbol-coin large ${symbol.toLowerCase()}`}>
                     {symbol === 'XAUUSD' ? 'Au' : symbol === 'EURUSD' ? '€' : '₿'}
@@ -1449,7 +1738,12 @@ export default function App() {
                   <p>{instrument.name}</p>
                   <strong>{last.close.toFixed(instrument.decimals)}</strong>
                   <span className="subtle-tag">
-                    {imported ? 'IMPORTED' : 'SIMULATED'} · NOT A LIVE QUOTE
+                    {usingMT5 ? 'MT5 · READ ONLY' : imported ? 'IMPORTED' : 'SIMULATED'} ·{' '}
+                    {usingMT5
+                      ? mt5Issue || brokerFreshness?.quoteStale
+                        ? 'STALE QUOTE'
+                        : 'BROKER DATA'
+                      : 'NOT A LIVE QUOTE'}
                   </span>
                 </div>
                 <div className="side-section">
@@ -1504,7 +1798,7 @@ export default function App() {
                           setTool('rectangle');
                         }}
                       >
-                        {z.name}
+                        Manual {z.name} zone
                       </button>
                     ))}
                   </div>
@@ -1616,6 +1910,12 @@ export default function App() {
                 {selectedDrawing ? (
                   <div className="side-section drawing-inspector">
                     <h3>Selected drawing</h3>
+                    <button
+                      className="secondary-button full"
+                      onClick={() => setDialog('drawing-properties')}
+                    >
+                      Drawing properties
+                    </button>
                     <label>
                       Label
                       <input
@@ -1724,11 +2024,14 @@ export default function App() {
         <span>
           <i /> LOCAL WORKSPACE
         </span>
-        <span>Paper trading · {imported ? 'Imported OHLCV' : 'Synthetic OHLCV'}</span>
+        <span>
+          Paper trading ·{' '}
+          {usingMT5 ? 'Read-only MT5 prices' : imported ? 'Imported OHLCV' : 'Synthetic OHLCV'}
+        </span>
         <a href="https://www.tradingview.com/" target="_blank" rel="noreferrer">
           Charts by TradingView Lightweight Charts™
         </a>
-        <span className="version">v0.1.0 · Open source</span>
+        <span className="version">v{APP_VERSION} · Open source</span>
       </footer>
       <input ref={csvInput} type="file" accept=".csv,text/csv" hidden onChange={importCSV} />
       <input
@@ -1762,6 +2065,9 @@ export default function App() {
                 {t === 'scripts' ? 'Study editor' : t[0].toUpperCase() + t.slice(1)}
               </button>
             ))}
+            <button className="settings-link" onClick={() => setDialog('indicator-settings')}>
+              <Settings2 size={14} /> Indicator settings
+            </button>
           </div>
           {libraryTab === 'indicators' ? (
             <>
@@ -1811,6 +2117,10 @@ export default function App() {
                   key={`${p.name}-${index}`}
                   onClick={() => {
                     setIndicators({ ...p.indicators });
+                    if ('config' in p && p.config)
+                      setIndicatorConfig(parseIndicatorConfig(p.config));
+                    if ('appearance' in p && p.appearance)
+                      setAppearance(parseChartAppearance(p.appearance));
                     notify(`Applied “${p.name}”.`);
                     setDialog(null);
                   }}
@@ -1846,7 +2156,19 @@ export default function App() {
                 <button
                   className="secondary-button"
                   onClick={() =>
-                    setScript(JSON.stringify({ version: 1, name: 'My study', indicators }, null, 2))
+                    setScript(
+                      JSON.stringify(
+                        {
+                          version: 1,
+                          name: 'My study',
+                          indicators,
+                          config: indicatorConfig,
+                          appearance,
+                        },
+                        null,
+                        2
+                      )
+                    )
                   }
                 >
                   Use current indicators
@@ -1918,11 +2240,48 @@ export default function App() {
                     setDialog(null);
                   }}
                 >
-                  {z.name}
+                  Manual {z.name} zone
                 </button>
               ))}
             </div>
           </div>
+        </Modal>
+      ) : null}
+      {dialog === 'indicator-settings' ? (
+        <Modal title="Indicator settings" onClose={() => setDialog(null)} wide>
+          <IndicatorSettingsEditor
+            value={indicatorConfig}
+            onChange={(value) => {
+              setIndicatorConfig(value);
+              setDialog(null);
+              notify('Indicator parameters and styles applied and saved.');
+            }}
+          />
+        </Modal>
+      ) : null}
+      {dialog === 'appearance' ? (
+        <Modal title="Chart appearance" onClose={() => setDialog(null)} wide>
+          <ChartAppearanceSettings
+            value={appearance}
+            onChange={(value) => {
+              setAppearance(value);
+              setDialog(null);
+              notify('Chart type and appearance applied and saved.');
+            }}
+          />
+        </Modal>
+      ) : null}
+      {dialog === 'drawing-properties' && selectedDrawing ? (
+        <Modal title="Drawing properties" onClose={() => setDialog(null)} wide>
+          <DrawingSettings
+            key={selectedDrawing.id}
+            drawing={selectedDrawing}
+            onChange={(value) => {
+              changeDrawings(drawings.map((d) => (d.id === value.id ? value : d)));
+              setDialog(null);
+              notify('Drawing coordinates and style applied and saved.');
+            }}
+          />
         </Modal>
       ) : null}
       {dialog === 'workspace' ? (
@@ -1933,7 +2292,16 @@ export default function App() {
                 downloadFile(
                   'signalhive-workspace.json',
                   JSON.stringify(
-                    { version: 1, symbol, timeframe, indicators, drawings: drawingMap },
+                    {
+                      version: 1,
+                      symbol,
+                      timeframe,
+                      indicators,
+                      config: indicatorConfig,
+                      appearance,
+                      grid,
+                      drawings: drawingMap,
+                    },
                     null,
                     2
                   )
@@ -1987,8 +2355,117 @@ export default function App() {
           </p>
         </Modal>
       ) : null}
+      {dialog === 'partial' ? (
+        <Modal title="Close part of a paper position" onClose={() => setDialog(null)}>
+          <p className="muted">
+            This changes only your virtual paper ledger. The remainder keeps its stop loss and
+            target.
+          </p>
+          <label className="partial-label">
+            Lots to close
+            <input
+              aria-label="Partial close lots"
+              type="number"
+              min={instrument.minLots}
+              step={instrument.lotStep}
+              value={partialLots}
+              onChange={(e) => setPartialLots(e.target.value)}
+            />
+          </label>
+          <div className="modal-actions">
+            <button className="secondary-button" onClick={() => setDialog(null)}>
+              Cancel
+            </button>
+            <button
+              className="primary-button"
+              onClick={() => {
+                try {
+                  if (!partialId) throw new Error('Choose a paper position first.');
+                  setPaper(
+                    partialClosePaperPosition(
+                      paper,
+                      partialId,
+                      Number(partialLots),
+                      last.close,
+                      last.time
+                    )
+                  );
+                  setDialog(null);
+                  notify('Paper portion closed; remaining position preserved.');
+                } catch (e) {
+                  notify(e instanceof Error ? e.message : 'Partial close rejected.');
+                }
+              }}
+            >
+              Close paper portion
+            </button>
+          </div>
+        </Modal>
+      ) : null}
       {dialog === 'settings' ? (
         <Modal title="Workspace settings" onClose={() => setDialog(null)}>
+          <div className="settings-shortcuts">
+            <button className="secondary-button" onClick={() => setDialog('appearance')}>
+              Chart appearance
+            </button>
+            <button className="secondary-button" onClick={() => setDialog('indicator-settings')}>
+              Indicator settings
+            </button>
+          </div>
+          <div className="settings-section">
+            <h3>Local MT5 data · read-only</h3>
+            <p>
+              The installed desktop app can read the already-open demo terminal. Broker orders are
+              never sent from this connection. Disconnect to use virtual replay paper trading.
+            </p>
+            {usingMT5 && mt5Snapshot ? (
+              <>
+                <div className="stat-line">
+                  <span>Broker demo equity ({mt5Snapshot.account.currency})</span>
+                  <strong>{mt5Snapshot.account.equity.toFixed(2)}</strong>
+                </div>
+                <p className="microcopy">
+                  {mt5Issue ||
+                    (brokerFreshness?.quoteStale
+                      ? 'Last broker quote is stale. No current market quote is being claimed.'
+                      : 'Connected snapshot.')}{' '}
+                  · {mt5Snapshot.account.positionsCount} broker positions ·{' '}
+                  {mt5Snapshot.account.ordersCount} broker orders
+                </p>
+                <button
+                  className="secondary-button"
+                  onClick={() => {
+                    if (paper.positions.length) {
+                      notify('Close paper positions before changing data source.');
+                      return;
+                    }
+                    setUsingMT5(false);
+                    setMT5Snapshot(null);
+                    setMT5Issue('');
+                    setHover(null);
+                  }}
+                >
+                  Disconnect MT5 source
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  className="secondary-button"
+                  disabled={!localDesktop}
+                  onClick={() => void connectMT5()}
+                >
+                  Connect local MT5 prices
+                </button>
+                <p className="microcopy">
+                  {localDesktop
+                    ? mt5Issue
+                    : 'Available in the installed desktop app with the optional local adapter. Mobile and web use CSV or simulated data.'}
+                </p>
+              </>
+            )}
+          </div>
+
           <button className="switch-row" onClick={() => setGrid((g) => !g)}>
             <span>Chart grid</span>
             <span className={`toggle ${grid ? 'on' : ''}`} />

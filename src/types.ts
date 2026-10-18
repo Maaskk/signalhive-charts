@@ -1,3 +1,5 @@
+import type { DrawingStyle } from './lib/drawingStyle';
+
 export interface Candle {
   time: number;
   open: number;
@@ -46,6 +48,7 @@ export interface Drawing {
   text?: string;
   locked?: boolean;
   hidden?: boolean;
+  style?: DrawingStyle;
 }
 export interface Projection {
   x: (time: number) => number | null;

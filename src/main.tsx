@@ -1,12 +1,14 @@
-import { StrictMode } from 'react';
+import { lazy, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
-import App from './App';
-import './styles.css';
+const App =
+  new URLSearchParams(location.search).get('workspace') === 'classic'
+    ? lazy(() => import('./App'))
+    : lazy(() => import('./workbench/Workbench'));
 
 createRoot(document.getElementById('root')!).render(
-  <StrictMode>
+  <Suspense fallback={<div className="app-loading">Opening Signalhive Charts…</div>}>
     <App />
-  </StrictMode>
+  </Suspense>
 );
 
 if ('serviceWorker' in navigator && import.meta.env.PROD) {

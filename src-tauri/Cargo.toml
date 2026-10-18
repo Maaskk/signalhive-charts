@@ -1,9 +1,9 @@
 [package]
 name = "signalhive-charts"
-version = "0.1.0"
+version = "0.1.1"
 description = "Offline technical charting and isolated virtual paper trading"
 authors = ["Signalhive Charts contributors"]
-license = "MIT"
+license = "AGPL-3.0-only"
 edition = "2021"
 rust-version = "1.90"
 

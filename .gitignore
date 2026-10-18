@@ -20,3 +20,9 @@ playwright-report/
 
 __pycache__/
 *.pyc
+
+# Local-only broker adapter outputs and configuration
+market-snapshot*.json
+market-snapshot*.stop
+bridge.json
+private-market/

@@ -1,3 +1,6 @@
+import { parseDrawingStyle } from './drawingStyle';
+import { parseIndicatorConfig, type IndicatorConfig } from './indicatorConfig';
+import { parseChartAppearance, type ChartAppearance } from './chartAppearance';
 import type { Candle, Drawing, IndicatorSettings, InstrumentId, Timeframe } from '../types';
 
 export const DEFAULT_INDICATORS: IndicatorSettings = {
@@ -122,6 +125,7 @@ export function parseDrawings(value: unknown): Drawing[] {
       text: typeof d.text === 'string' ? d.text.slice(0, 300) : undefined,
       locked: d.locked === true,
       hidden: d.hidden === true,
+      style: d.style === undefined ? undefined : parseDrawingStyle(d.style),
     };
   });
 }
@@ -131,6 +135,9 @@ export interface WorkspaceFile {
   symbol: InstrumentId;
   timeframe: Timeframe;
   indicators: IndicatorSettings;
+  config?: IndicatorConfig;
+  appearance?: ChartAppearance;
+  grid?: boolean;
   drawings: Partial<Record<InstrumentId, Drawing[]>>;
   customCandles?: Candle[];
 }
@@ -155,6 +162,9 @@ export function parseWorkspace(value: unknown): WorkspaceFile {
     symbol: v.symbol,
     timeframe: v.timeframe,
     indicators: parseIndicators(v.indicators),
+    config: v.config === undefined ? undefined : parseIndicatorConfig(v.config),
+    appearance: v.appearance === undefined ? undefined : parseChartAppearance(v.appearance),
+    grid: v.grid !== false,
     drawings: Object.fromEntries(Object.entries(v.drawings).map(([k, d]) => [k, parseDrawings(d)])),
   };
 }

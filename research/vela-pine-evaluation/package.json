@@ -1,0 +1,11 @@
+{
+  "name": "signalhive-engine-pine-evaluation",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "dependencies": {
+    "@luxalgo/vela": "0.8.4",
+    "@luxalgo/vela-pinets": "0.2.16",
+    "pinets": "0.11.1"
+  }
+}

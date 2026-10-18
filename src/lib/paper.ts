@@ -44,6 +44,17 @@ export interface OpenPaperRequest {
   takeProfit: number;
   time: number;
 }
+export type PaperSizeRequest = Omit<OpenPaperRequest, 'lots' | 'time'>;
+export interface PaperSizeResult {
+  lots: number | null;
+  risk: number;
+  margin: number;
+  reason: string | null;
+}
+export interface PaperAmendment {
+  stopLoss: number;
+  takeProfit: number;
+}
 export interface PaperSummary {
   balance: number;
   equity: number;
@@ -311,6 +322,175 @@ export function openPaperPosition(
   return { ...state, nextId: state.nextId + 1, positions: [...state.positions, position] };
 }
 
+/** Floors to the broker lot step and never raises the configured risk or margin limits. */
+export function calculatePaperSize(
+  account: PaperAccount,
+  request: PaperSizeRequest,
+  marks: Marks = {}
+): PaperSizeResult {
+  let risk = 0;
+  let margin = 0;
+  try {
+    const state = parsePaperAccount(account);
+    const id = instrument(request.instrument);
+    const direction = side(request.side);
+    const price = finite(request.price, 'Entry', true);
+    validateStops(direction, price, request.stopLoss, request.takeProfit);
+    const spec = INSTRUMENT_BY_ID[id];
+    const riskPerLot = finite(
+      Math.abs(price - request.stopLoss) * spec.contractSize,
+      'Risk per lot',
+      true
+    );
+    const marginPerLot = finite(
+      (price * spec.contractSize) / state.settings.leverage,
+      'Margin per lot',
+      true
+    );
+    // When the minimum lot cannot fit, report its cost rather than silently selecting it.
+    risk = finite(riskPerLot * spec.minLots, 'Minimum-lot risk', true);
+    margin = finite(marginPerLot * spec.minLots, 'Minimum-lot margin', true);
+    const summary = paperSummary(state, { ...marks, [id]: price });
+    if (summary.equity <= 0) throw new Error('No positive virtual equity is available.');
+    const tradeBudget = summary.equity * state.settings.riskPerTrade;
+    const aggregateBudget = Math.max(
+      0,
+      summary.equity * state.settings.maxAggregateRisk - summary.riskAtStops
+    );
+    const capacity = Math.min(
+      (tradeBudget + 1e-9) / riskPerLot,
+      (aggregateBudget + 1e-9) / riskPerLot,
+      Math.max(0, summary.freeMargin + 1e-9) / marginPerLot
+    );
+    const rawSteps = capacity / spec.lotStep;
+    if (!Number.isFinite(rawSteps) || rawSteps > Number.MAX_SAFE_INTEGER)
+      throw new Error('The calculated paper size exceeds the supported numeric range.');
+    // Correct only representational error at an exact step; final validation uses open's policy.
+    const steps = Math.floor(rawSteps + Number.EPSILON * Math.max(1, rawSteps));
+    const lots = Number((steps * spec.lotStep).toFixed(12));
+    if (lots < spec.minLots - 1e-12) {
+      const cause =
+        risk > tradeBudget + 1e-9
+          ? 'per-trade risk budget'
+          : risk > aggregateBudget + 1e-9
+            ? 'aggregate stop-risk budget'
+            : 'free margin';
+      throw new Error(
+        `Minimum ${spec.minLots} lots exceeds the ${cause} (risk $${risk.toFixed(2)}, margin $${margin.toFixed(2)}).`
+      );
+    }
+    // Keep sizing and order admission on exactly the same account, marks and validation path.
+    const candidate = openPaperPosition(state, { ...request, lots, time: 0 }, marks);
+    const position = candidate.positions[candidate.positions.length - 1];
+    return { lots, risk: position.risk, margin: position.margin, reason: null };
+  } catch (error) {
+    return {
+      lots: null,
+      risk,
+      margin,
+      reason: error instanceof Error ? error.message : 'Unable to calculate a paper position size.',
+    };
+  }
+}
+
+/** A stop/target amendment remains protective relative to the original entry, with unchanged lots. */
+export function amendPaperPosition(
+  account: PaperAccount,
+  id: string,
+  amendment: PaperAmendment,
+  marks: Marks = {}
+): PaperAccount {
+  const state = parsePaperAccount(account);
+  const position = state.positions.find((p) => p.id === id);
+  if (!position) throw new Error('Paper position was not found.');
+  validateStops(position.side, position.entryPrice, amendment.stopLoss, amendment.takeProfit);
+  const updated: PaperPosition = {
+    ...position,
+    stopLoss: amendment.stopLoss,
+    takeProfit: amendment.takeProfit,
+    risk: finite(
+      Math.abs(position.entryPrice - amendment.stopLoss) *
+        position.lots *
+        INSTRUMENT_BY_ID[position.instrument].contractSize,
+      'Position risk',
+      true
+    ),
+  };
+  const result = {
+    ...state,
+    positions: state.positions.map((p) => (p.id === id ? updated : p)),
+  };
+  const summary = paperSummary(result, marks);
+  if (summary.equity <= 0) throw new Error('No positive virtual equity is available.');
+  if (updated.risk > summary.equity * state.settings.riskPerTrade + 1e-9)
+    throw new Error('Amended stop risk exceeds the per-trade virtual account limit.');
+  if (summary.riskAtStops > summary.equity * state.settings.maxAggregateRisk + 1e-9)
+    throw new Error('Amended aggregate stop risk exceeds the virtual account limit.');
+  return result;
+}
+
+/** Realizes one valid lot-step portion; every partial fill receives its own unique journal ID. */
+export function partialClosePaperPosition(
+  account: PaperAccount,
+  id: string,
+  lots: number,
+  price: number,
+  time: number
+): PaperAccount {
+  const state = parsePaperAccount(account);
+  const position = state.positions.find((p) => p.id === id);
+  if (!position) throw new Error('Paper position was not found.');
+  finite(price, 'Exit price', true);
+  timeValue(time, 'Exit time');
+  if (time < position.openedAt) throw new Error('Paper exit time cannot precede entry.');
+  validateLots(position.instrument, lots);
+  const spec = INSTRUMENT_BY_ID[position.instrument];
+  const closeSteps = Math.round(lots / spec.lotStep);
+  const remainingSteps = Math.round(position.lots / spec.lotStep) - closeSteps;
+  if (remainingSteps < 0) throw new Error('Close lots exceed the open paper position.');
+  if (remainingSteps === 0) return closePaperPosition(state, id, price, time);
+  const remainingLots = Number((remainingSteps * spec.lotStep).toFixed(12));
+  validateLots(position.instrument, remainingLots);
+  if (state.trades.length >= 10_000)
+    throw new Error('Paper trade history limit reached. Export/reset before continuing.');
+  if (state.nextId >= Number.MAX_SAFE_INTEGER)
+    throw new Error('Paper ledger position limit reached.');
+  const portion = (volume: number): PaperPosition => ({
+    ...position,
+    lots: volume,
+    margin: finite(
+      (position.entryPrice * volume * spec.contractSize) / state.settings.leverage,
+      'Position margin',
+      true
+    ),
+    risk: finite(
+      Math.abs(position.entryPrice - position.stopLoss) * volume * spec.contractSize,
+      'Position risk',
+      true
+    ),
+  });
+  const closing = portion(Number((closeSteps * spec.lotStep).toFixed(12)));
+  const trade: ClosedPaperTrade = {
+    ...closing,
+    id: `paper-${state.nextId}`,
+    exitPrice: price,
+    closedAt: time,
+    pnl: pnl(closing, price),
+    reason: 'manual',
+  };
+  const trades = [...state.trades, trade];
+  return {
+    ...state,
+    nextId: state.nextId + 1,
+    balance: finite(
+      state.initialBalance + trades.reduce((sum, item) => sum + item.pnl, 0),
+      'Balance'
+    ),
+    positions: state.positions.map((p) => (p.id === id ? portion(remainingLots) : p)),
+    trades,
+  };
+}
+
 export function closePaperPosition(
   account: PaperAccount,
   id: string,
@@ -337,7 +517,10 @@ export function closePaperPosition(
   };
   return {
     ...state,
-    balance: finite(state.balance + profit, 'Balance'),
+    balance: finite(
+      state.initialBalance + [...state.trades, trade].reduce((sum, item) => sum + item.pnl, 0),
+      'Balance'
+    ),
     positions: state.positions.filter((p) => p.id !== id),
     trades: [...state.trades, trade],
   };

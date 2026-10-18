@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Signalhive Charts",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "io.github.maaskk.signalhivecharts",
   "build": {
     "beforeDevCommand": "npm run dev -- --port 1420 --strictPort",
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Signalhive Charts — Analysis & Paper Trading",
+        "title": "Signalhive Charts \u2014 Analysis & Paper Trading",
         "width": 1440,
         "height": 960,
         "minWidth": 360,

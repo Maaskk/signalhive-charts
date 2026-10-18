@@ -1,0 +1,63 @@
+{
+  "version": "0.11.1",
+  "source": "synthetic",
+  "checks": "Native Pine v6 parsed and executed; 8 plots; independently checked SMA9=159.6 and RSI14=100. Not full TradingView compatibility certification.",
+  "output": {
+    "SMA": {
+      "count": 600,
+      "last": 159.6
+    },
+    "EMA9": {
+      "count": 600,
+      "last": 159.6
+    },
+    "EMA21": {
+      "count": 600,
+      "last": 159
+    },
+    "EMA200": {
+      "count": 600,
+      "last": 150.05
+    },
+    "RSI": {
+      "count": 600,
+      "last": 100
+    },
+    "MACD": {
+      "count": 600,
+      "last": 0.7
+    },
+    "Signal": {
+      "count": 600,
+      "last": 0.7
+    },
+    "Histogram": {
+      "count": 600,
+      "last": 0
+    },
+    "__labels__": {
+      "count": 1,
+      "last": []
+    },
+    "__lines__": {
+      "count": 1,
+      "last": []
+    },
+    "__boxes__": {
+      "count": 1,
+      "last": []
+    },
+    "__linefills__": {
+      "count": 1,
+      "last": []
+    },
+    "__polylines__": {
+      "count": 1,
+      "last": []
+    },
+    "__tables__": {
+      "count": 1,
+      "last": []
+    }
+  }
+}

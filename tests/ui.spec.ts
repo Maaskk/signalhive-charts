@@ -6,7 +6,7 @@ test.beforeEach(async ({ page }) => {
   const list: string[] = [];
   errors.set(page, list);
   page.on('pageerror', e => list.push(e.message));
-  await page.goto('/');
+  await page.goto('/?workspace=classic');
   await expect(page.locator('svg.drawing-overlay')).toBeVisible();
 });
 test.afterEach(async ({ page }) => { expect(errors.get(page), 'No uncaught browser errors').toEqual([]); });
@@ -51,7 +51,7 @@ test('long-position handles, AMD zones, undo/redo and persistence', async ({ pag
   await page.getByRole('button', { name: 'Redo drawing', exact: true }).click();
   await expect(drawing).not.toContainText('R/R 1:2.00');
   await page.getByRole('button', { name: 'Drawing objects', exact: true }).click();
-  await page.getByRole('button', { name: 'Accumulation', exact: true }).click();
+  await page.getByRole('button', { name: 'Manual Accumulation zone', exact: true }).click();
   await clickChart(page, .18, .48); await clickChart(page, .39, .72);
   await expect(page.locator('svg.drawing-overlay')).toContainText('ACCUMULATION');
   await expect.poll(async () => (await storedDrawings(page)).length).toBe(2);
@@ -160,7 +160,9 @@ test('mobile layout, side-panel close and touch drawing', async ({ browser }) =>
   const page = await context.newPage();
   const pageErrors: string[] = [];
   page.on('pageerror', e => pageErrors.push(e.message));
-  await page.goto('/');
+  await page.goto('/?workspace=classic');
+  await expect(page.locator('.side-panel')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Show side panel', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Close side panel', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Close side panel', exact: true }).click();
   await expect(page.locator('.side-panel')).toHaveCount(0);
